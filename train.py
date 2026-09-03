@@ -52,6 +52,7 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
     linear_dim = cfg.hp("linear_dim", None)
     encoder_class = cfg.hp("encoder_class", "TransformerEncoder")  # WP-D: pick the set encoder by name
     use_degradation = cfg.hp("use_degradation", True)              # WP-D: off for clean-baseline runs
+    encoder_kwargs = cfg.hp("encoder_kwargs", {}) or {}            # WP-D: extra kwargs for the chosen encoder class
     contrast_temp = cfg.hp("contrast_temp", 0.07)
     contrastive_weight = cfg.hp("contrastive_weight", 0.05) # Min
     contrastive_max = cfg.hp("contrastive_max", None) # Max for schedule, None for fixed
@@ -108,7 +109,7 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
     preproc_class = getattr(importlib.import_module("embedding.preprocs"), preproc_type)
 
     preproc = preproc_class(norm_constants).to(device).train()
-    logger.info(f"Encoder class: {encoder_class} | training degradation: {use_degradation}")
+    logger.info(f"Encoder class: {encoder_class} | training degradation: {use_degradation} | encoder_kwargs: {encoder_kwargs}")
     encoder = getattr(models, encoder_class)(
         num_features=preproc.num_features,
         embed_size=embed_size, 
@@ -118,6 +119,7 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
         linear_dim=linear_dim, 
         num_tokens=num_pf_objects if linear_dim is not None else None,
         pairwise=pairwise,
+        **encoder_kwargs,
     ).to(device).train()
     projector = Projector(latent_dim, proj_dim, hidden_dim=(proj_dim*4)).to(device).train()
     classifier = nn.Linear(proj_dim, num_classes).to(device).train()
