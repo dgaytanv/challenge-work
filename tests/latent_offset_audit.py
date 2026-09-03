@@ -60,7 +60,7 @@ def main():
     enc.load_state_dict(ck["encoder"]); enc.eval()
 
     # capture the bottleneck's input h so the offset can be attributed: ||W E[h]|| vs ||W||_F ||E[h]||
-    h_sum, h_n = {}, {}
+    h_chunks = []
     head = None
     for name in ("bottleneck", "rho", "out_proj"):
         if hasattr(enc, name) and isinstance(getattr(enc, name), torch.nn.Module):
@@ -68,9 +68,7 @@ def main():
     if head is not None:
         def _hook(_m, inp):
             v = inp[0].detach()
-            v = v.reshape(-1, v.shape[-1]).double()
-            h_sum["s"] = h_sum.get("s", 0) + v.sum(0)
-            h_n["n"] = h_n.get("n", 0) + v.shape[0]
+            h_chunks.append(v.reshape(-1, v.shape[-1]).double().cpu())
         head.register_forward_pre_hook(_hook)
 
     feats, labels = load_data(args.data, map_location="cpu", max_events=args.events)
@@ -103,23 +101,31 @@ def main():
         nb = float(bias.norm())
         print(f"  {bkey:20s} ||b||   = {nb:.4f}  ({100*nb/max(offset,1e-9):.1f}% of the offset)")
         print(f"  feature term ||E[z]-b||          = {float((mu.cpu()-bias.cpu()).norm()):.4f}")
-    if "s" in h_sum and weight is not None:
-        Eh = (h_sum["s"] / h_n["n"]).float().cpu()
-        W = weight.detach().cpu().float()
+    h_offset = h_spread = float("nan")
+    if h_chunks and weight is not None:
+        H = torch.cat(h_chunks)                       # [N, embed_size], the bottleneck's input
+        Eh = H.mean(0)
+        # exact same convention as the latent: mean L2 norm of the centred vector
+        h_spread = float((H - Eh).norm(dim=1).mean())
+        h_offset = float(Eh.norm())
+        W = weight.detach().cpu().double()
         WEh = float((W @ Eh).norm())
-        print(f"  ||E[h]|| (bottleneck input) = {float(Eh.norm()):.4f}")
-        print(f"  ||W E[h]||                  = {WEh:.4f}   "
-              f"(offset is {100*WEh/max(offset,1e-9):.1f}% explained by the feature term)")
+        print(f"  ||E[h]|| (bottleneck input)  = {h_offset:.4f}")
+        print(f"  per-event spread of h        = {h_spread:.4f}")
+        print(f"  h OFFSET RATIO               = {h_offset/max(h_spread,1e-9):.2f}x   "
+              f"<- same pathology one layer up if this is large")
+        print(f"  ||W E[h]||                   = {WEh:.4f}   "
+              f"({100*WEh/max(offset,1e-9):.1f}% of the latent offset)")
         print(f"  ATTRIB: offset = ||W E[h] + b||; W and E[h] each scale it linearly, so compare "
               f"||W||_F and ||E[h]|| across checkpoints to see which grew")
     # spread collapse shows up per dimension, not just in the mean norm
     sd = lat.std(0)
     print(f"  per-dim std          = {[round(float(v),3) for v in sd]}")
     print(f"  per-dim mean         = {[round(float(v),3) for v in mu.cpu()]}")
-    _eh = float((h_sum["s"] / h_n["n"]).norm()) if "s" in h_sum else float("nan")
     print(f"  RATIO-CSV,{args.tag},{offset:.4f},{spread:.4f},{offset/max(spread,1e-9):.3f},"
           f"{float(weight.norm()) if weight is not None else float('nan'):.4f},"
-          f"{float(bias.norm()) if bias is not None else float('nan'):.4f},{_eh:.4f}")
+          f"{float(bias.norm()) if bias is not None else float('nan'):.4f},"
+          f"{h_offset:.4f},{h_spread:.4f},{h_offset/max(h_spread,1e-9):.3f}")
 
 
 if __name__ == "__main__":
