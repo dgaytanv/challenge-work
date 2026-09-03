@@ -1,5 +1,8 @@
-# WP-D: Deep Sets + WP-C two-view consistency (from train_config_c_twoview_cos1_nmse.yaml).
-# Bench this checkpoint against THIS config (--train_cfg), not train_config.yaml.
+# WP-D: Deep Sets + WP-C two-view consistency, CENTRED cosine (from
+# train_config_c_twoview_ccos1_nmse.yaml, wp-c @ 62a5c8e).
+# Raw-latent cosine is near-vacuous: this encoder's latent has ||mean||/spread = 3.9,
+# giving raw matched cos 0.976 vs shuffled 0.935. Centred: 0.597 vs 0.011.
+# See tests/latent_offset_control.py. Bench against THIS config.
 model_name: rt_d_deepsets_twoview
 data:
   preproc_type: PFPreProcessor
@@ -28,6 +31,7 @@ hyperparameters:
   consistency_mse_weight: 0.1
   instance_weight: 0.0
   consistency_mse_normalized: true
+  consistency_cos_centered: true
   seed: null
   encoder_class: DeepSetsEncoder
   use_degradation: true
