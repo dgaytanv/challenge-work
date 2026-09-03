@@ -152,7 +152,8 @@ def main():
     print("  (a fraction at or below this means the motion is no more probe-aligned than chance)\n")
     print(f"clean AUC: EvalMLP (grader's, nonlinear) {auc0:.4f}   logistic (linear) {auc0_lin:.4f}\n")
     print(f"{'family':8s} {'sev':>4s} {'|dz|/sprd':>10s} {'alongG':>7s} {'vs rnd':>7s} "
-          f"{'alongW':>7s} {'shared':>7s} {'maha':>7s} {'MLP_AUC':>7s} {'dMLP':>8s} "
+          f"{'alongW':>7s} {'shared':>7s} {'||t||':>8s} {'scatter':>8s} "
+          f"{'maha':>7s} {'MLP_AUC':>7s} {'dMLP':>8s} "
           f"{'LIN_AUC':>8s} {'dLIN':>9s} {'ncAcc':>7s} {'clsShift':>9s}")
 
     rows = []
@@ -175,14 +176,22 @@ def main():
             # Is dz one shared shift of the whole population, or per-event scatter? A shared
             # shift is a very different failure: the cloud moves off the manifold the probe was
             # fit on, rather than events crossing the boundary individually.
+            # WP-C's decomposition: dz_i = t + s_i with mean(s_i)=0. Report BOTH components in
+            # absolute units and let `shared` be derived, because the ratio alone cannot say
+            # whether it moved because t moved, because the scatter moved, or because the
+            # mixture changed -- t and s respond to a wider cloud by different factors.
             dzbar = dz.mean(0, keepdim=True)
-            shared = float(dzbar.norm() / max(raw, 1e-9))
+            t_norm = float(dzbar.norm())                       # ||t||, the rigid part
+            scatter = float((dz - dzbar).norm(dim=1).mean())   # mean||s_i||, rigid part removed
+            shared = float(t_norm / max(raw, 1e-9))
             cos_bar_w = float((dzbar / dzbar.norm().clamp(min=1e-12) * what).sum())
             rows.append(dict(family=fam, severity=s, rel=raw / spread, along_g=fg, along_w=fw,
                              maha=maha, raw=raw, auc=auc, shared=shared, cos_shift_w=cos_bar_w,
-                             auc_linear=aucl, nc_acc=nc, cls_shift=cls_shift))
+                             auc_linear=aucl, nc_acc=nc, cls_shift=cls_shift,
+                             t_norm=t_norm, scatter=scatter))
             print(f"{fam:8s} {s:4.1f} {raw/spread:10.3f} {fg:7.3f} {fg/base_g:7.2f} "
-                  f"{fw:7.3f} {shared:7.3f} {maha:7.3f} {auc:7.4f} {auc-auc0:+8.4f} "
+                  f"{fw:7.3f} {shared:7.3f} {t_norm:8.3f} {scatter:8.3f} "
+                  f"{maha:7.3f} {auc:7.4f} {auc-auc0:+8.4f} "
                   f"{aucl:8.4f} {aucl-auc0_lin:+9.4f} {nc:7.3f} {cls_shift:+9.3f}")
 
     rank = lambda x: np.argsort(np.argsort(x))
