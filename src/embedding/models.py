@@ -222,7 +222,7 @@ class TransformerEncoder(nn.Module):
             linear_dim: Union[int, None] = None,
             num_tokens: Union[int, None] = None,
             pairwise: bool = False,
-            readout: str = "cls",
+            readout: str = "pma",   # SUBMISSION DEFAULT: eval.py passes no readout kwarg
             prenorm: bool = False,
             dead_frac_token: bool = False,
         ):
