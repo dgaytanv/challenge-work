@@ -6,3 +6,7 @@ eval_plots/
 logs/
 *.pth
 *.log
+
+!checkpoints/
+checkpoints/*
+!checkpoints/rt_d_pma0_aug_meanpt_encoder_20260903_221125.pth
