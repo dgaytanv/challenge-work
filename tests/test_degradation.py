@@ -161,6 +161,66 @@ def test_eval_400_tokens():
     print("[ok] works on the 400-candidate eval tensor")
 
 
+def test_symmetries_only_mode():
+    """dead_regions=False: the module must be symmetries-only, never dropping a candidate."""
+    x = real_events(1024)
+    d = Degradation(severity=None, dead_regions=False).to(DEV).train()
+    out = d(x)
+    assert torch.equal(out.abs().sum(-1) != 0, x.abs().sum(-1) != 0), "no candidate may be dropped"
+    for col in (0, 3, 4, 5, 6):
+        assert torch.equal(out[..., col], x[..., col])
+    # Two views built by composing: symmetry module first, degrader second, so both views
+    # share one rotation/reflection (the pattern WP-C's two-view loop uses).
+    sym = Degradation(severity=None, dead_regions=False).to(DEV).train()
+    deg = Degradation(severity=None, rotate_phi=False, reflect_eta=False,
+                      p_pt_scale=0.0).to(DEV).train()
+    x_sym = sym(x)
+    x_c, x_d = x_sym, deg(x_sym)
+    alive = x_d.abs().sum(-1) != 0
+    assert torch.equal(x_d[alive], x_c[alive]), "views must agree exactly on surviving candidates"
+    assert not torch.equal(x_d, x_c), "the degraded view should actually differ"
+    print("[ok] dead_regions=False is symmetries-only; compose-then-degrade keeps views aligned")
+
+
+def test_pt_scale_mode_keeps_rows_alive():
+    """The pt-scaling milder mode leaves rows ALIVE with a reduced pt, by design.
+
+    Consequence for a two-view loop: with p_pt_scale > 0 the degraded view can differ
+    from the clean view on candidates that were not dropped. That is the intended
+    "partially working region", not a bug -- but it means a test asserting that
+    survivors are bit-identical must set p_pt_scale=0.
+    """
+    x = real_events(1024)
+    deg = Degradation(severity=None, rotate_phi=False, reflect_eta=False, p_clean=0.0,
+                      p_charged_only=0.0, p_neutral_only=0.0, p_pt_scale=1.0,
+                      curriculum=False).to(DEV).train()
+    out = deg(x)
+    assert torch.equal(out.abs().sum(-1) != 0, x.abs().sum(-1) != 0), \
+        "pt-scale mode must not kill any candidate"
+    changed = (out[..., 0] != x[..., 0])
+    assert changed.any(), "pt-scale mode should reduce some pt values"
+    assert (out[..., 0][changed] < x[..., 0][changed]).all(), "pt must only be scaled down"
+    for col in (1, 2, 3, 4, 5, 6):
+        assert torch.equal(out[..., col], x[..., col]), "only pt may change in pt-scale mode"
+    print(f"[ok] pt-scale mode keeps rows alive with reduced pt "
+          f"({changed.float().mean():.3f} of candidates scaled)")
+
+
+def test_curriculum_never_exceeds_s_max():
+    """The ramp must not hand back more severity than s_max, even for tiny s_max."""
+    for s_max in (0.0, 0.1, 0.85):
+        d = Degradation(severity=None, s_max=s_max, curriculum=True)
+        assert d._current_s_max() <= s_max + 1e-9, \
+            f"curriculum start {d._current_s_max()} exceeds s_max {s_max}"
+        d.calls = 10 ** 6
+        assert abs(d._current_s_max() - s_max) < 1e-9, "ramp must end exactly at s_max"
+    # s_max=0 with curriculum on must really drop nothing, without relying on p_clean.
+    x = real_events(512)
+    d = Degradation(severity=None, s_max=0.0, p_clean=0.0, curriculum=True).to(DEV).train()
+    assert torch.equal(d(x).abs().sum(-1) != 0, x.abs().sum(-1) != 0), "s_max=0 must drop nothing"
+    print("[ok] curriculum never exceeds s_max (incl. s_max=0)")
+
+
 if __name__ == "__main__":
     print(f"device: {DEV}")
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

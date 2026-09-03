@@ -59,6 +59,10 @@ class Degradation(nn.Module):
         Exact symmetries of pp collisions, applied in train mode only. Free augmentation.
     p_clean
         Probability that a training event gets no dead regions at all (symmetries still apply).
+    dead_regions
+        Set False for a symmetries-only module (used to give both views of a two-view loop the
+        same rotation/reflection before one of them is degraded). Skips generating the family
+        masks altogether, so it costs almost nothing.
     s_max
         Upper end of the sampled dead-area fraction in train mode.
     warmup_calls, curriculum
@@ -86,6 +90,7 @@ class Degradation(nn.Module):
         reflect_eta: bool = True,
         p_clean: float = 0.15,
         s_max: float = 0.85,
+        dead_regions: bool = True,
         warmup_calls: int = 600,
         curriculum: bool = True,
         p_charged_only: float = 0.05,
@@ -104,6 +109,7 @@ class Degradation(nn.Module):
         self.reflect_eta = reflect_eta
         self.p_clean = p_clean
         self.s_max = s_max
+        self.dead_regions = dead_regions
         self.warmup_calls = warmup_calls
         self.curriculum = curriculum
         self.p_charged_only = p_charged_only
@@ -302,8 +308,11 @@ class Degradation(nn.Module):
     def _current_s_max(self) -> float:
         if not self.curriculum or self.warmup_calls <= 0:
             return self.s_max
+        # Clamped: with s_max below CURRICULUM_S_START the ramp would otherwise run *downwards*
+        # and hand back more severity than was asked for (e.g. s_max=0 starting at 0.2).
+        start = min(self.CURRICULUM_S_START, self.s_max)
         t = min(1.0, self.calls / self.warmup_calls)
-        return self.CURRICULUM_S_START + (self.s_max - self.CURRICULUM_S_START) * t
+        return start + (self.s_max - start) * t
 
     def _forward_train(self, x) -> torch.Tensor:
         B, N, _ = x.shape
@@ -311,6 +320,9 @@ class Degradation(nn.Module):
         valid = x[..., 0] > 0
 
         x = self._apply_symmetries(x, valid, gen)
+        if not self.dead_regions:
+            self.calls += 1
+            return x
         eta, phi = x[..., 1], x[..., 2]
 
         s_max = self._current_s_max()
