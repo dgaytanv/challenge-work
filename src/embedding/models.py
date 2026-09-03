@@ -489,7 +489,9 @@ class PMAEncoder(nn.Module):
             embed_size: int,
             latent_dim: int,
             num_heads: int = 8,
-            num_layers: int = 4,
+            num_layers: int = 0,   # SUBMISSION: 0 is the shipped architecture. eval.py passes
+                                   # num_layers from the config, which says 0; this default means
+                                   # a missing key cannot silently build a different encoder.
             linear_dim: Union[int, None] = None,
             num_tokens: Union[int, None] = None,
             pairwise: bool = False,

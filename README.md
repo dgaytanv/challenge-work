@@ -34,3 +34,26 @@ Special thanks to Roy Cruz Candelaria, Maciej Glowacki, and Mehrnoosh Moallemi f
 At eval time the model sees both background and signal events and outputs a per-event anomaly score, scored via AUC vs. degradation severity. A robust model keeps a high AUC as more of the detector goes dark; your score is the area under that curve. `eval.py` overlays a red "(No degradation)" reference curve against your model's ("Your solution") on the same plot.
 
 `eval.py` here uses **your own** `degradation.py` to simulate severity locally — it's for testing your own approach, not the official scoring run. For judging, we'll degrade the eval set ourselves with a method we're not disclosing in advance (conceptually it kills off geometric η–φ regions, similar to real detector dead zones), so solutions aren't tuned to the exact grading procedure.
+
+## How to reproduce (WP-D hedge submission: PMA set encoder)
+
+Encoder: `PMAEncoder` with `num_layers=0` — a per-particle MLP followed by pooling by multihead
+attention with 4 learned seed queries. No self-attention stack, so cost is O(N) and deletion of a
+candidate removes its terms from a masked pooling rather than perturbing an attention normalisation.
+Aliased to `TransformerEncoder` at the end of `src/embedding/models.py` so the organisers'
+`eval.py` builds it unchanged.
+
+`num_layers` is the one setting `eval.py` DOES pass from the config, so `configs/train_config.yaml`
+says `num_layers: 0` and the class default is also 0 on this branch. A wrong value fails loudly at
+`load_state_dict` rather than silently building a different encoder — verified.
+
+Preprocessor: `PFPreProcessor` (the stock pt rule) as trained.
+
+**This branch is deliberately training-free**: it ships `src/embedding/models.py`,
+`configs/train_config.yaml` and the single checkpoint, which is all `eval.py` needs. Training code
+is on branch `wp-d` (`11c1288`); retrain with `configs/train_config_d_pma0_aug.yaml`.
+
+Shipped checkpoint: `checkpoints/rt_d_pma0_aug_encoder_20260903_204550.pth` (the only `.pth` here).
+
+Measured: bench `mean_area` 0.8162 +- 0.0038, clean AUC 0.9215 +- 0.0012 (R=5, 20k events);
+official area 0.8693 / 0.8613 (n=2). Stock anchor: `mean_area` 0.7734, clean AUC 0.8605.

@@ -6,3 +6,10 @@ eval_plots/
 logs/
 *.pth
 *.log
+
+# --- SUBMISSION EXCEPTION -------------------------------------------------------------
+# The organisers' notebook does sorted(glob("checkpoints/*.pth"))[-1] and asserts if empty,
+# so exactly one checkpoint ships. aux/ and smokes/ stay ignored.
+!checkpoints/
+checkpoints/*
+!checkpoints/rt_d_pma0_aug_encoder_20260903_204550.pth
