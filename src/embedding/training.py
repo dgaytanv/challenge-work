@@ -351,9 +351,15 @@ def validate_epoch(
         delta_r = delta_r_from_normalized(x, norm_constants) if pairwise else None
 
         latent = encoder(preproc(x), delta_r, mask)
-        # See bn_batch_stats: in two-view runs the projector's running stats lag the latent's
-        # moving offset/scale, which silently breaks the val head and hence early stopping.
-        ctx = bn_batch_stats(projector) if (two_view and val_bn_batch_stats) else contextlib.nullcontext()
+        # See bn_batch_stats. Default ON for ALL runs, not just two-view: the failure quantity
+        # is (running_mean error) / (running_std), so ANY encoder whose latent spread shrinks
+        # faster than BN's momentum tracks is exposed -- and the arms most at risk are the ones
+        # where the consistency term is working best, since better invariance means a smaller
+        # spread and more sigmas per unit of lag (WP-D). Cost on a healthy model is 0.008 val
+        # accuracy; mean_area is untouched because the bench scores encoder latents and never
+        # runs the projector. NOTE: this makes two_view=false differ from the stock loop in
+        # VALIDATION only -- the bit-for-bit stock reproduction test covers train_epoch.
+        ctx = bn_batch_stats(projector) if val_bn_batch_stats else contextlib.nullcontext()
         with ctx:
             embeddings = F.normalize(projector(latent), dim=1)
             logits = classifier(embeddings)
