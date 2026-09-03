@@ -306,6 +306,7 @@ def validate_epoch(
     two_view=False, consistency_weight=1.0, consistency_mse_weight=0.1,
     instance_weight=0.0, instance_loss=None, normalize_mse=True, center_cos=True,
     logit_consistency_weight=0.0, logit_consistency_loss=None,
+    val_bn_batch_stats=True,
 ):
     if two_view and degradation is None:
         raise ValueError(
