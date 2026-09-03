@@ -8,9 +8,9 @@ data:
 
 # Consumed by train.py via cfg.hp(...) / cfg.get_hyperparam(...)
 hyperparameters:
-  num_epochs: 60
+  num_epochs: 25
   early_stopping_patience: 5
-  batch_size: 128  # 512 OOM'd the GPU (7.92GiB) - full [B,H,N,N] attention matrices scale linearly with this
+  batch_size: 256
   mixed_prec: true
 
   lr: 1.0e-3
