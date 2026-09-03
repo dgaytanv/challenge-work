@@ -148,6 +148,40 @@ class TransformerEncoderBlock(nn.Module):
         src = self.norm2(src)
         return src
 
+class PMAPooling(nn.Module):
+    """Pooling by Multihead Attention (Set Transformer): k learned seed queries
+    cross-attend over the particle tokens. Permutation invariant, and unlike a single
+    CLS token it aggregates over the whole surviving set, so deleting candidates moves
+    the output smoothly instead of through one token's attention distribution.
+    Returns the k seed outputs flattened: [B, num_seeds * embed_dim].
+    """
+    def __init__(self, embed_dim: int, num_heads: int, num_seeds: int = 4):
+        super().__init__()
+        assert embed_dim % num_heads == 0
+        self.num_heads = num_heads
+        self.num_seeds = num_seeds
+        self.head_dim = embed_dim // num_heads
+        self.seeds = nn.Parameter(torch.randn(1, num_seeds, embed_dim) / math.sqrt(embed_dim))
+        self.q_proj = nn.Linear(embed_dim, embed_dim)
+        self.k_proj = nn.Linear(embed_dim, embed_dim)
+        self.v_proj = nn.Linear(embed_dim, embed_dim)
+        self.out_proj = nn.Linear(embed_dim, embed_dim)
+
+    def forward(self, x: torch.Tensor, key_padding_mask: Union[None, torch.Tensor] = None):
+        B, N, E = x.shape
+        S, H, D = self.num_seeds, self.num_heads, self.head_dim
+        Q = self.q_proj(self.seeds.expand(B, -1, -1)).view(B, S, H, D).transpose(1, 2)
+        K = self.k_proj(x).view(B, N, H, D).transpose(1, 2)
+        V = self.v_proj(x).view(B, N, H, D).transpose(1, 2)
+        scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(D)  # B,H,S,N
+        if key_padding_mask is not None:
+            scores = scores.masked_fill(key_padding_mask[:, None, None, :], float("-inf"))
+        attn = torch.softmax(scores, dim=-1)
+        # An all-dead event has every key masked -> softmax over all -inf is NaN. Zero it.
+        attn = torch.nan_to_num(attn, nan=0.0)
+        out = torch.matmul(attn, V).transpose(1, 2).contiguous().view(B, S, E)
+        return self.out_proj(out).reshape(B, S * E)
+
 class TransformerEncoder(nn.Module):
     """
     Transformer encoder dimension parameters:
@@ -159,7 +193,14 @@ class TransformerEncoder(nn.Module):
     - linear_dim: if specified, use linear attention with this projection dimension
     - num_tokens: if using linear attention, the maximum number of tokens (including CLS) for projection
     - pairwise: whether to use pairwise bias in attention layers (requires pairwise_feats input); resource intensive!
+    - readout: how the per-event vector is pooled out of the token sequence before the bottleneck.
+      "cls" (default, stock) reads one token; the others also pool over surviving particle tokens so
+      that deleting candidates changes the output smoothly. Dead rows never contribute.
     """
+    PMA_SEEDS = 4
+    # readout name -> multiple of embed_size that the bottleneck consumes
+    READOUTS = {"cls": 1, "cls+mean": 2, "cls+mean+max": 3, "pma": PMA_SEEDS}
+
     def __init__(
             self, 
             num_features: int, 
@@ -170,8 +211,12 @@ class TransformerEncoder(nn.Module):
             linear_dim: Union[int, None] = None,
             num_tokens: Union[int, None] = None,
             pairwise: bool = False,
+            readout: str = "cls",
         ):
         super().__init__()
+        if readout not in self.READOUTS:
+            raise ValueError(f"unknown readout {readout!r}, expected one of {sorted(self.READOUTS)}")
+        self.readout = readout
         self.input_proj = nn.Linear(num_features, embed_size)
         self.layers = nn.ModuleList(
             [
@@ -184,9 +229,11 @@ class TransformerEncoder(nn.Module):
                 ) for _ in range(num_layers)
             ]
         )
-        self.norm_cls_embedding = nn.LayerNorm(embed_size)
+        self.pma = PMAPooling(embed_size, num_heads, self.PMA_SEEDS) if readout == "pma" else None
+        readout_dim = self.READOUTS[readout] * embed_size
+        self.norm_cls_embedding = nn.LayerNorm(readout_dim)
         self.cls_token = nn.Parameter(torch.randn(1, 1, embed_size))
-        self.bottleneck = nn.Linear(embed_size, latent_dim)
+        self.bottleneck = nn.Linear(readout_dim, latent_dim)
         self.pairwise = pairwise # bool
 
     def forward(self, x: torch.Tensor, pairwise_feats: Union[None, torch.Tensor] = None, mask: Union[None, torch.Tensor] = None):
@@ -221,9 +268,30 @@ class TransformerEncoder(nn.Module):
         for layer in self.layers:
             x = layer(x, pairwise_bias, src_key_padding_mask=mask)
 
-        cls_embedding = x[:, 0, :] # CLS token embedding
-        latent = self.bottleneck(self.norm_cls_embedding(cls_embedding))
+        pooled = self._pool(x, mask)
+        latent = self.bottleneck(self.norm_cls_embedding(pooled))
         return latent
+
+    def _pool(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        """x is [B, 1+N, E] (CLS first), mask is [B, 1+N] with True = excluded."""
+        cls_embedding = x[:, 0, :]
+        if self.readout == "cls":
+            return cls_embedding
+
+        tokens = x[:, 1:, :]                       # [B, N, E]
+        dead = mask[:, 1:]                         # [B, N], True = dead/padded
+        if self.readout == "pma":
+            return self.pma(tokens, dead)
+
+        alive = (~dead).to(tokens.dtype)           # [B, N]
+        n_alive = alive.sum(dim=1, keepdim=True)   # [B, 1]
+        mean = (tokens * alive.unsqueeze(-1)).sum(dim=1) / n_alive.clamp(min=1.0)
+        parts = [cls_embedding, mean]
+        if self.readout == "cls+mean+max":
+            neg = torch.finfo(tokens.dtype).min
+            mx = tokens.masked_fill(dead.unsqueeze(-1), neg).max(dim=1).values
+            parts.append(torch.where(n_alive > 0, mx, torch.zeros_like(mx)))
+        return torch.cat(parts, dim=-1)
     
 class Projector(nn.Module):
     def __init__(self, input_dim, proj_dim, hidden_dim):
