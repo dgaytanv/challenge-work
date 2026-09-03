@@ -1,0 +1,33 @@
+# Data config for the class-balanced 400-candidate training subsample
+# (~/hackathon-shared/data/train_400_balanced_160k.pt, built by WP-E from the full 12 GB file).
+# Why it exists: the eval set has 400 candidates per event while the small train file is the
+# top-200-by-pt truncation of full events, which puts a ~1.9 sigma offset on log(pt/sum_pt)
+# before any degradation is applied. This file matches the eval geometry at ~2x the small
+# file's token count. Same four background classes, 40k events each.
+#
+# Pass the data path explicitly:
+#   --data ~/hackathon-shared/data/train_400_balanced_160k.pt
+# train.py takes num_pf_objects from the tensor shape, so n_objects below is provenance only.
+ds_name: robust_tagging_train_400_balanced_160k
+
+data_processing:
+  source: collide1m
+  sample_dir: /hackathon-data/C9_robust_tagging/train
+  out_path: /hackathon-data/C9_robust_tagging/train
+  pfcands: true
+  n_objects: 400
+  sort_by_pt: true
+  sk_spacing: null
+  nevents_per_class: 40000   # class-balanced by construction, so no inv_freq weighting needed
+
+  samples:
+    - QCD:
+      - QCD_HT50toInf
+    - DY:
+      - DYJetsToLL_13TeV-madgraphMLM-pythia8
+    - TT:
+      - tt0123j_5f_ckm_LO_MLM_leptonic
+      - tt0123j_5f_ckm_LO_MLM_hadronic
+      - tt0123j_5f_ckm_LO_MLM_semiLeptonic
+    - WJets:
+      - WJetsToLNu_13TeV-madgraphMLM-pythia8
