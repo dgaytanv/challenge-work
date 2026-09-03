@@ -147,3 +147,25 @@ class SupConLoss(nn.Module):
         loss = loss.view(anchor_count, batch_size).mean()
 
         return loss
+
+class NTXentInstanceLoss(nn.Module):
+    """SimCLR NT-Xent over 2B embeddings where the ONLY positive of view i is its
+    counterpart view of the same event (unlike InfoNCELoss, which uses class positives).
+
+    z1, z2: [B, D] projector outputs (re-normalized here for safety).
+    """
+    def __init__(self, temperature: float = 0.07):
+        super().__init__()
+        self.temperature = temperature
+
+    def forward(self, z1: torch.Tensor, z2: torch.Tensor) -> torch.Tensor:
+        B = z1.size(0)
+        device = z1.device
+        z = F.normalize(torch.cat([z1, z2], dim=0), dim=1)          # [2B, D]
+        sim = torch.matmul(z, z.T) / self.temperature               # [2B, 2B]
+        sim.fill_diagonal_(float("-inf"))                            # no self-contrast
+        targets = torch.cat([
+            torch.arange(B, 2 * B, device=device),
+            torch.arange(0, B, device=device),
+        ])
+        return F.cross_entropy(sim, targets)

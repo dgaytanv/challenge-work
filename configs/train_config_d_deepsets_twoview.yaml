@@ -1,7 +1,6 @@
-# WP-D: Deep Sets + B's generator, latent_dim 16.
-# IMPORTANT: bench with --train_cfg configs/train_config_d_deepsets_aug_lat16.yaml
-# (latent_dim 16 changes the checkpoint shape; the default config would fail to load it).
-model_name: rt_d_deepsets_aug_lat16
+# WP-D: Deep Sets + WP-C two-view consistency (from train_config_c_twoview_cos1_nmse.yaml).
+# Bench this checkpoint against THIS config (--train_cfg), not train_config.yaml.
+model_name: rt_d_deepsets_twoview
 data:
   preproc_type: PFPreProcessor
   val_split: 0.1
@@ -17,12 +16,18 @@ hyperparameters:
   embed_size: 128
   num_heads: 8
   num_layers: 4
-  latent_dim: 16
+  latent_dim: 6
   proj_dim: 12
   linear_dim: null
   contrast_temp: 0.07
   contrastive_weight: 0.05
   contrastive_max: null
   contrastive_warmup: 0.05
+  two_view: true
+  consistency_weight: 1.0
+  consistency_mse_weight: 0.1
+  instance_weight: 0.0
+  consistency_mse_normalized: true
+  seed: null
   encoder_class: DeepSetsEncoder
   use_degradation: true
