@@ -191,6 +191,14 @@ class TransformerEncoder(nn.Module):
 
     def forward(self, x: torch.Tensor, pairwise_feats: Union[None, torch.Tensor] = None, mask: Union[None, torch.Tensor] = None):
         B, N, F = x.shape
+        # Rows zeroed by degradation (or padding) arrive as all-zero feature rows but the
+        # dataloader's mask was built BEFORE degradation. Re-derive the mask from the input so
+        # dead candidates are excluded from attention instead of entering as constant tokens.
+        dead = (x.abs().sum(dim=-1) == 0)  # [B, N]
+        if mask is None:
+            mask = torch.zeros(B, N + 1, dtype=torch.bool, device=x.device)
+        mask = mask.clone()
+        mask[:, 1:] |= dead
         x = self.input_proj(x) # [B, N, E]
 
         cls_tokens = self.cls_token.expand(B, -1, -1)
