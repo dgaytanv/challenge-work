@@ -115,6 +115,12 @@ def train_epoch(
     two_view=False, consistency_weight=1.0, consistency_mse_weight=0.1,
     instance_weight=0.0, instance_loss=None, normalize_mse=True,
 ):
+    if two_view and degradation is None:
+        raise ValueError(
+            "two_view=True requires a degradation module: without one both views are the "
+            "same tensor, the consistency loss reads a perfect 0.0, and the run looks "
+            "healthy while training nothing. Pass degradation=, or set two_view=False."
+        )
     if degradation is not None:
         degradation.train()
     if symmetry is not None:
@@ -144,7 +150,7 @@ def train_epoch(
         if two_view:
             # Two views of the SAME events, concatenated on the batch dim so preproc's
             # BatchNorm and the encoder see both together in one forward.
-            x_d = degradation(x) if degradation is not None else x
+            x_d = degradation(x)
             x = torch.cat([x, x_d], dim=0)
             mask = torch.cat([mask, mask], dim=0)
             labels = torch.cat([labels, labels], dim=0)
@@ -238,6 +244,12 @@ def validate_epoch(
     two_view=False, consistency_weight=1.0, consistency_mse_weight=0.1,
     instance_weight=0.0, instance_loss=None, normalize_mse=True,
 ):
+    if two_view and degradation is None:
+        raise ValueError(
+            "two_view=True requires a degradation module: without one both views are the "
+            "same tensor, the consistency loss reads a perfect 0.0, and the run looks "
+            "healthy while training nothing. Pass degradation=, or set two_view=False."
+        )
     if degradation is not None:
         degradation.eval()
     if symmetry is not None:
@@ -265,7 +277,7 @@ def validate_epoch(
         labels = labels.to(device)
 
         if two_view:
-            x_d = degradation(x) if degradation is not None else x
+            x_d = degradation(x)
             x = torch.cat([x, x_d], dim=0)
             mask = torch.cat([mask, mask], dim=0)
             labels = torch.cat([labels, labels], dim=0)
