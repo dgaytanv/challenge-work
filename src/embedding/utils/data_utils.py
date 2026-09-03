@@ -30,7 +30,13 @@ def set_safe_thread_count():
         except (FileNotFoundError, ValueError):
             pass
 
-    torch.set_num_threads(min(quota, os.cpu_count()) if quota else os.cpu_count())
+    n = min(quota, os.cpu_count()) if quota else os.cpu_count()
+    # Shared-box override: several training/eval processes share 8 cores tonight; the lock wrappers export
+    # RT_NUM_THREADS so each process takes a fair share instead of one thread per core each.
+    env = os.environ.get("RT_NUM_THREADS")
+    if env and env.isdigit() and int(env) > 0:
+        n = min(n, int(env))
+    torch.set_num_threads(n)
 
 def ensure_finite(name, tensor):
     if not torch.isfinite(tensor).all():

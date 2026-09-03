@@ -249,3 +249,26 @@ class PFPreProcessorMaxPt(_PFPreProcessorPtVariant):
     def pt_feature(self, pt_raw, valid):
         lead = torch.where(valid, pt_raw, torch.zeros_like(pt_raw)).amax(dim=-1, keepdim=True)
         return torch.log((pt_raw / lead.clamp_min(EPS)).clamp_min(EPS))
+
+
+class PFPreProcessorMeanPt(_PFPreProcessorPtVariant):
+    """pt encoded as ``log(pt_i / mean_pt)`` over the surviving candidates.
+
+    Identically ``log(pt_i / sum_pt) + log(n_valid)``: the stock rule plus a count
+    correction. This is the robust member of the family for a simple reason -- a dead
+    region removes candidates and their pt together, so ``sum_pt`` and ``n_valid``
+    shrink by roughly the same factor and their ratio barely moves, whereas ``sum_pt``
+    alone scales directly with the loss.
+
+    It also removes a train/eval mismatch that has nothing to do with degradation:
+    training events carry 200 candidates and eval events 400, so ``sum_pt`` is about
+    twice as large at eval time and the stock feature is offset by roughly log(2)
+    before any dead region is applied. A per-candidate mean is insensitive to the
+    number of candidates in the event.
+    """
+
+    def pt_feature(self, pt_raw, valid):
+        ptv = torch.where(valid, pt_raw, torch.zeros_like(pt_raw))
+        n = valid.sum(dim=-1, keepdim=True).clamp_min(1).to(pt_raw.dtype)
+        mean = (ptv.sum(dim=-1, keepdim=True) / n).clamp_min(EPS)
+        return torch.log((pt_raw / mean).clamp_min(EPS))
