@@ -1,13 +1,13 @@
-# WP-D run config: d_pma2_aug
+# WP-D run config: d_pma2_aug (Phase-1 protocol: 25 epochs, bs 256, patience 5)
 model_name: rt_d_pma2_aug
 data:
   preproc_type: PFPreProcessor
   val_split: 0.1
   pairwise: false
 hyperparameters:
-  num_epochs: 60
+  num_epochs: 25
   early_stopping_patience: 5
-  batch_size: 128
+  batch_size: 256
   mixed_prec: true
   lr: 0.001
   lr_min: 0.0
