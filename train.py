@@ -194,6 +194,12 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
     es = EarlyStopping(patience=patience, mode="min", min_delta=0.0)
 
     model_path = os.path.join(outdir, f"{cfg.get_model_name()}_encoder_{timestamp}.pth")
+    # Two extra selections alongside the best-val-loss file, which keeps its name and format.
+    # Rationale: total val loss mixes CE, contrast and the consistency terms, so the file it
+    # picks is "best composite loss", not best AUC and not best robustness.
+    bestauc_path = model_path.replace(".pth", "_bestauc.pth")
+    last_path = model_path.replace(".pth", "_last.pth")
+    best_val_auc = float("-inf")
 
     logger.info(f"Starting training for {num_epochs} epochs.")
     for epoch in range(num_epochs):
@@ -263,22 +269,33 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
             )
         logger.info(log_str)
 
+        def _checkpoint():
+            return {
+                "preproc": preproc.state_dict(),
+                "encoder": encoder.state_dict(),
+                "projector": projector.state_dict(),
+                "classifier": classifier.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "scheduler": scheduler.state_dict(),
+                "epoch": epoch,
+                "norm_constants": {k: (v.detach().cpu() if torch.is_tensor(v) else v) for k, v in norm_constants.items()},
+            }
+
         # save best on validation loss 
         if va["loss"] < best_val:
             best_val = va["loss"]
-            torch.save(
-                {
-                    "preproc": preproc.state_dict(),
-                    "encoder": encoder.state_dict(),
-                    "projector": projector.state_dict(),
-                    "classifier": classifier.state_dict(),
-                    "optimizer": optimizer.state_dict(),
-                    "scheduler": scheduler.state_dict(),
-                    "epoch": epoch,
-                    "norm_constants": {k: (v.detach().cpu() if torch.is_tensor(v) else v) for k, v in norm_constants.items()},
-                }, model_path
-            )
+            torch.save(_checkpoint(), model_path)
             logger.info(f"Saved best encoder to: {model_path}")
+
+        # best val AUC: val loss mixes several terms, so it does not always pick the best latent
+        val_auc = va.get("auc", float("nan"))
+        if val_auc == val_auc and val_auc > best_val_auc:   # nan-safe
+            best_val_auc = val_auc
+            torch.save(_checkpoint(), bestauc_path)
+            logger.info(f"Saved best-AUC encoder ({val_auc:.4f}) to: {bestauc_path}")
+
+        # last completed epoch, rewritten every epoch so it survives an early kill
+        torch.save(_checkpoint(), last_path)
 
         if es.step(va["loss"]):
             logger.info("Early stopping triggered.")

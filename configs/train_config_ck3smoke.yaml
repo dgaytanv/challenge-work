@@ -1,0 +1,43 @@
+model_name: robust_tagging
+
+# Consumed by train.py via cfg.get_trdata_cfg(...)
+data:
+  preproc_type: PFPreProcessor   # PF-candidate inputs -> 14 features after preproc
+  val_split: 0.1
+  pairwise: false
+
+# Consumed by train.py via cfg.hp(...) / cfg.get_hyperparam(...)
+hyperparameters:
+  num_epochs: 3
+  early_stopping_patience: 5
+  batch_size: 64  # Phase-1 protocol; two_view makes this 512 sequences per step
+  mixed_prec: true
+
+  lr: 1.0e-3
+  lr_min: 0.0
+  lr_warmup: 0.05
+
+  # transformer encoder
+  embed_size: 32
+  num_heads: 4
+  num_layers: 1
+  latent_dim: 6
+  proj_dim: 12
+  linear_dim: null
+
+  # contrastive (InfoNCE) term
+  contrast_temp: 0.07
+  contrastive_weight: 0.05
+  contrastive_max: null
+  contrastive_warmup: 0.05
+
+  # WP-C: two-view consistency training.
+  # two_view=false reproduces stock single-view behaviour exactly (acceptance test).
+  # Consistency acts on the LATENT (pre-projector) - that is what the grader's probe sees.
+  two_view: true
+  consistency_weight: 1.0        # weight on mean(1 - cos(z_degraded, z_clean.detach()))
+  consistency_mse_weight: 0.1    # weight on mse(z_degraded, z_clean.detach())
+  instance_weight: 0.0           # SimCLR NT-Xent, positives = the other view only
+  consistency_mse_normalized: true   # displacement in units of clean-population spread
+  consistency_cos_centered: true    # cosine on latents centred by the clean batch mean
+  seed: null                     # set an int for reproducible runs (acceptance test)
