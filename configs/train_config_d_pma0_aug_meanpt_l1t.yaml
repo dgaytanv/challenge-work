@@ -1,0 +1,36 @@
+# WP-D: L1T float reference for WP-G (HGQ2/FPGA). Same recipe as the competition submission
+# (PMAEncoder num_layers=0 + PFPreProcessorMeanPt + WP-B's generator), retrained on L1T data.
+#   --data /home/jovyan/hack-data/C9_robust_tagging/train/robust_tagging_train_data_small_l1t.pt
+# degradation_eta_max 3.0: L1T eta spans exactly [-3, 3] (verified on the file). With the 5.0
+# default the generator would place dead regions in |eta| > 3 where the detector has no
+# candidates, so a nominal severity would drop fewer real candidates than intended and the
+# model would be trained on a systematically milder corruption than its severity label claims.
+# Feature normalisation: NOT from precomputed constants. pfcands=true means norm_constants is
+# {} and PFPreProcessorMeanPt never reads it; the five continuous features are normalised by an
+# internal BatchNorm1d whose statistics are learned on the L1T train split during this run.
+model_name: rt_d_pma0_aug_meanpt_l1t
+data:
+  preproc_type: PFPreProcessorMeanPt
+  val_split: 0.1
+  pairwise: false
+hyperparameters:
+  num_epochs: 25
+  early_stopping_patience: 5
+  batch_size: 256
+  mixed_prec: true
+  lr: 0.001
+  lr_min: 0.0
+  lr_warmup: 0.05
+  embed_size: 128
+  num_heads: 8
+  num_layers: 0
+  latent_dim: 6
+  proj_dim: 12
+  linear_dim: null
+  contrast_temp: 0.07
+  contrastive_weight: 0.05
+  contrastive_max: null
+  contrastive_warmup: 0.05
+  encoder_class: PMAEncoder
+  use_degradation: true
+  degradation_eta_max: 3.0

@@ -53,6 +53,10 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
     encoder_class = cfg.hp("encoder_class", "TransformerEncoder")  # WP-D: pick the set encoder by name
     use_degradation = cfg.hp("use_degradation", True)              # WP-D: off for clean-baseline runs
     encoder_kwargs = cfg.hp("encoder_kwargs", {}) or {}            # WP-D: extra kwargs for the chosen encoder class
+    # Detector eta acceptance for the degradation generator. Default 5.0 = offline PF, so every
+    # existing config is unchanged; L1T data spans [-3, 3] and needs 3.0 or the generator would
+    # place dead regions in eta bands the detector never fills, understating the real severity.
+    degradation_eta_max = cfg.hp("degradation_eta_max", 5.0)
     contrast_temp = cfg.hp("contrast_temp", 0.07)
     contrastive_weight = cfg.hp("contrastive_weight", 0.05) # Min
     contrastive_max = cfg.hp("contrastive_max", None) # Max for schedule, None for fixed
@@ -129,6 +133,7 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
     symmetry = Degradation(
         severity=None, s_max=0.0, p_clean=1.0, curriculum=False,
         p_charged_only=0.0, p_neutral_only=0.0, p_pt_scale=0.0,
+        eta_max=degradation_eta_max,
     ).to(device).train() if two_view else None
     # WP-D: use_degradation=false is the clean-baseline arm (d-deepsets-clean); it keeps
     # the dead-region module out entirely. two_view needs it, so the two are exclusive.
@@ -136,12 +141,13 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
         raise ValueError("two_view requires use_degradation: the degraded view needs dead regions")
     degradation = Degradation(
         severity=None, rotate_phi=not two_view, reflect_eta=not two_view,
+        eta_max=degradation_eta_max,
     ).to(device).train() if use_degradation else None
 
     preproc_class = getattr(importlib.import_module("embedding.preprocs"), preproc_type)
 
     preproc = preproc_class(norm_constants).to(device).train()
-    logger.info(f"Encoder class: {encoder_class} | training degradation: {use_degradation} | encoder_kwargs: {encoder_kwargs}")
+    logger.info(f"Encoder class: {encoder_class} | training degradation: {use_degradation} | encoder_kwargs: {encoder_kwargs} | degradation_eta_max: {degradation_eta_max}")
     encoder = getattr(models, encoder_class)(
         num_features=preproc.num_features,
         embed_size=embed_size, 
