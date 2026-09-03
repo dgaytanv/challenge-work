@@ -22,7 +22,7 @@ hyperparameters:
   num_heads: 8
   num_layers: 4
   latent_dim: 6
-  readout: cls
+  readout: cls+mean+max
   proj_dim: 12
   linear_dim: null
 
