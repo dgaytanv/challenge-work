@@ -1,0 +1,32 @@
+# WP-D: leader config with WP-B2's PFPreProcessorMeanPt (log pt / mean SURVIVING pt).
+# Why it could matter here: the stock log(pt/sum_pt) is a per-event normalisation whose
+# denominator shrinks when a dead region removes candidates, so every surviving candidate's
+# pt feature shifts even though the candidate itself is untouched. B measures MeanPt removing
+# ~95% of that shift and ~95% of the 200-vs-400 train/eval offset.
+# preproc_type is a `data:` key, not a hyperparameter - bench with --train_cfg THIS file or
+# the checkpoint's preproc state_dict will be loaded into the wrong class.
+model_name: rt_d_deepsets_aug_meanpt
+data:
+  preproc_type: PFPreProcessorMeanPt
+  val_split: 0.1
+  pairwise: false
+hyperparameters:
+  num_epochs: 25
+  early_stopping_patience: 5
+  batch_size: 256
+  mixed_prec: true
+  lr: 0.001
+  lr_min: 0.0
+  lr_warmup: 0.05
+  embed_size: 128
+  num_heads: 8
+  num_layers: 4
+  latent_dim: 6
+  proj_dim: 12
+  linear_dim: null
+  contrast_temp: 0.07
+  contrastive_weight: 0.05
+  contrastive_max: null
+  contrastive_warmup: 0.05
+  encoder_class: DeepSetsEncoder
+  use_degradation: true
