@@ -81,6 +81,17 @@ def main():
             rows.append((fam, s, cos, rel, auc))
             print(f"{fam:8s} {s:4.1f} {cos:11.4f} {rel:10.3f} {auc:7.4f} {auc-auc0:+7.4f}")
 
+    def pearson(a, b):
+        return float(np.corrcoef(a, b)[0, 1])
+
+    print(f"\nper-family correlation (5 severity points each):")
+    print(f"{'family':8s} {'r(cos,AUC)':>11s} {'r(drift,AUC)':>13s}")
+    for fam in FAMILIES:
+        f_rows = [r for r in rows if r[0] == fam]
+        c = np.array([r[2] for r in f_rows]); d = np.array([r[3] for r in f_rows])
+        a = np.array([r[4] for r in f_rows])
+        print(f"{fam:8s} {pearson(c, a):+11.3f} {pearson(d, a):+13.3f}")
+
     cos = np.array([r[2] for r in rows]); rel = np.array([r[3] for r in rows])
     auc = np.array([r[4] for r in rows])
     print(f"\ncorrelation across all {len(rows)} (family, severity) points:")
