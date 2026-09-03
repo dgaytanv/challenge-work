@@ -111,6 +111,22 @@ def main():
         from sklearn.metrics import roc_auc_score
         return float(roc_auc_score((y.numpy() == 1).astype(int), lr.predict_proba(z.numpy())[:, 1]))
     auc0_lin = lin_auc(z0, y0)
+
+    # Below-chance AUC means the probe's ranking INVERTS, not merely degrades. Two candidate
+    # causes, and they are distinguishable: either the latents really moved across the class
+    # axis (geometry inverted), or the geometry is intact and the MLP's extrapolated output is
+    # anti-correlated with the truth out there. Nearest-clean-centroid accuracy on the degraded
+    # latents settles it: it uses only geometry, no fitted probe.
+    sig = (y0 == 1); bkg = ~sig
+    mu_sig, mu_bkg = z0[sig].mean(0), z0[bkg].mean(0)
+    class_axis = mu_sig - mu_bkg
+    class_sep = float(class_axis.norm())
+    axis_hat = class_axis / max(class_sep, 1e-12)
+    def nearest_centroid_acc(z, y):
+        ds = (z - mu_sig).norm(dim=1); db = (z - mu_bkg).norm(dim=1)
+        pred = (ds < db)
+        return float((pred == (y == 1)).float().mean())
+    nc0 = nearest_centroid_acc(z0, y0)
     w = torch.tensor(lr.coef_[0], dtype=torch.float32, device=device)
     what = (w / w.norm()).unsqueeze(0)
 
@@ -137,7 +153,7 @@ def main():
     print(f"clean AUC: EvalMLP (grader's, nonlinear) {auc0:.4f}   logistic (linear) {auc0_lin:.4f}\n")
     print(f"{'family':8s} {'sev':>4s} {'|dz|/sprd':>10s} {'alongG':>7s} {'vs rnd':>7s} "
           f"{'alongW':>7s} {'shared':>7s} {'maha':>7s} {'MLP_AUC':>7s} {'dMLP':>8s} "
-          f"{'LIN_AUC':>8s} {'dLIN':>9s}")
+          f"{'LIN_AUC':>8s} {'dLIN':>9s} {'ncAcc':>7s} {'clsShift':>9s}")
 
     rows = []
     for fam in FAMILIES:
@@ -153,6 +169,9 @@ def main():
             raw = float(n.mean())
             auc = float(ev.probe_auc(probe, zd, yd, num_classes, device))
             aucl = lin_auc(zd, yd)
+            nc = nearest_centroid_acc(zd, yd)
+            # component of the rigid shift along the clean class axis, in units of class separation
+            cls_shift = float((dzbar_pre := (zd.to(device) - z0d).mean(0)).cpu() @ axis_hat) / max(class_sep, 1e-12)
             # Is dz one shared shift of the whole population, or per-event scatter? A shared
             # shift is a very different failure: the cloud moves off the manifold the probe was
             # fit on, rather than events crossing the boundary individually.
@@ -161,10 +180,10 @@ def main():
             cos_bar_w = float((dzbar / dzbar.norm().clamp(min=1e-12) * what).sum())
             rows.append(dict(family=fam, severity=s, rel=raw / spread, along_g=fg, along_w=fw,
                              maha=maha, raw=raw, auc=auc, shared=shared, cos_shift_w=cos_bar_w,
-                             auc_linear=aucl))
+                             auc_linear=aucl, nc_acc=nc, cls_shift=cls_shift))
             print(f"{fam:8s} {s:4.1f} {raw/spread:10.3f} {fg:7.3f} {fg/base_g:7.2f} "
                   f"{fw:7.3f} {shared:7.3f} {maha:7.3f} {auc:7.4f} {auc-auc0:+8.4f} "
-                  f"{aucl:8.4f} {aucl-auc0_lin:+9.4f}")
+                  f"{aucl:8.4f} {aucl-auc0_lin:+9.4f} {nc:7.3f} {cls_shift:+9.3f}")
 
     rank = lambda x: np.argsort(np.argsort(x))
 
@@ -220,6 +239,14 @@ def main():
     print("  dz is near-orthogonal to the linear discriminant (along_w ~0.02 vs 0.34 chance).")
     print("  If the linear probe degrades much LESS, the damage is the nonlinear probe")
     print("  extrapolating outside the clean latent's support, not a class boundary being crossed.")
+    inv = [r for r in rows if r["auc"] < 0.5]
+    print(f"\nBELOW-CHANCE POINTS (MLP AUC < 0.5): {len(inv)} of {len(rows)}")
+    print(f"  clean nearest-centroid accuracy = {nc0:.3f}, class separation ||mu_s-mu_b|| = {class_sep:.3f}")
+    for r in inv:
+        print(f"  {r['family']:7s} s={r['severity']:.1f}  MLP {r['auc']:.4f}  LINEAR {r['auc_linear']:.4f}  "
+              f"nearest-centroid {r['nc_acc']:.3f}  shift along class axis {r['cls_shift']:+.3f} sep")
+    print("  nearest-centroid near or above 0.5 while MLP is below it = the GEOMETRY did not invert")
+    print("  and the inversion is the nonlinear probe's extrapolated output, not events changing side.")
 
     os.makedirs(args.out, exist_ok=True)
     path = os.path.join(args.out, f"probedrift-{args.tag}.json")
