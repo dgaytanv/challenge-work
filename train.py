@@ -69,6 +69,7 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
     instance_weight = cfg.hp("instance_weight", 0.0)
     normalize_mse = cfg.hp("consistency_mse_normalized", True)
     center_cos = cfg.hp("consistency_cos_centered", True)
+    val_bn_batch_stats = cfg.hp("val_bn_batch_stats", True)
     logit_consistency_weight = cfg.hp("logit_consistency_weight", 0.0)
     seed = cfg.hp("seed", None)
     if seed is not None:
@@ -78,7 +79,7 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
     logger.info(
         f"two_view={two_view} consistency_weight={consistency_weight} "
         f"consistency_mse_weight={consistency_mse_weight} instance_weight={instance_weight} "
-        f"consistency_mse_normalized={normalize_mse} consistency_cos_centered={center_cos} logit_consistency_weight={logit_consistency_weight}"
+        f"consistency_mse_normalized={normalize_mse} consistency_cos_centered={center_cos} logit_consistency_weight={logit_consistency_weight} val_bn_batch_stats={val_bn_batch_stats}"
     )
 
     logger.info("Scaler for mixed precision training: {}".format(mixed_prec))
@@ -264,6 +265,7 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
             normalize_mse=normalize_mse,
             center_cos=center_cos,
             logit_consistency_weight=logit_consistency_weight,
+            val_bn_batch_stats=val_bn_batch_stats,
             logit_consistency_loss=jsd_criterion,
         )
 

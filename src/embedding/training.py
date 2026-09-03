@@ -1,6 +1,8 @@
 # monitoring.py
+import contextlib
 import math
 import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import train_test_split
@@ -67,6 +69,33 @@ def build_train_val_loaders(
     train_loader = DataLoader(ds_tr,  batch_size=batch_size, shuffle=True,  num_workers=0)
     val_loader   = DataLoader(ds_val, batch_size=batch_size, shuffle=False, num_workers=0)
     return train_loader, val_loader
+
+
+@contextlib.contextmanager
+def bn_batch_stats(module):
+    """Run a module's BatchNorm layers on BATCH statistics, without updating running stats.
+
+    Needed for two-view validation. Under the 2B mixed batch the latent's offset and scale
+    move faster than BatchNorm's running averages can track, so in eval mode the projector
+    receives inputs its running stats do not describe: WP-D measured a projected-embedding
+    std of 0.029 against 0.15 single-view, with the classifier predicting one class for every
+    val event. That corrupts val loss, val AUC, early stopping and checkpoint selection —
+    a run can early-stop on a broken head and ship an encoder from epoch 1. The latent itself
+    is fine, which is why the damage is invisible in the encoder and visible only downstream.
+
+    momentum is forced to 0 so a validation pass cannot write into the running statistics.
+    """
+    bns = [m for m in module.modules() if isinstance(m, nn.modules.batchnorm._BatchNorm)]
+    saved = [(m.training, m.momentum) for m in bns]
+    try:
+        for m in bns:
+            m.train()
+            m.momentum = 0.0
+        yield
+    finally:
+        for m, (was_training, mom) in zip(bns, saved):
+            m.train(was_training)
+            m.momentum = mom
 
 def _cls_mask(mask):
     """Prepend the always-attendable CLS slot to a [B, N] padding mask -> [B, N+1]."""
@@ -322,9 +351,13 @@ def validate_epoch(
         delta_r = delta_r_from_normalized(x, norm_constants) if pairwise else None
 
         latent = encoder(preproc(x), delta_r, mask)
-        embeddings = F.normalize(projector(latent), dim=1)
+        # See bn_batch_stats: in two-view runs the projector's running stats lag the latent's
+        # moving offset/scale, which silently breaks the val head and hence early stopping.
+        ctx = bn_batch_stats(projector) if (two_view and val_bn_batch_stats) else contextlib.nullcontext()
+        with ctx:
+            embeddings = F.normalize(projector(latent), dim=1)
+            logits = classifier(embeddings)
         loss_constrast = contrastive_loss(embeddings, labels)
-        logits = classifier(embeddings)
         loss_ce = ce_loss_fn(logits, labels)
 
         contrast_weight_value = contrastive_weight.get() if scheduled_contrst_wght else contrastive_weight
