@@ -64,6 +64,7 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
     consistency_mse_weight = cfg.hp("consistency_mse_weight", 0.1)
     instance_weight = cfg.hp("instance_weight", 0.0)
     normalize_mse = cfg.hp("consistency_mse_normalized", True)
+    center_cos = cfg.hp("consistency_cos_centered", True)
     seed = cfg.hp("seed", None)
     if seed is not None:
         torch.manual_seed(int(seed))
@@ -72,7 +73,7 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
     logger.info(
         f"two_view={two_view} consistency_weight={consistency_weight} "
         f"consistency_mse_weight={consistency_mse_weight} instance_weight={instance_weight} "
-        f"consistency_mse_normalized={normalize_mse}"
+        f"consistency_mse_normalized={normalize_mse} consistency_cos_centered={center_cos}"
     )
 
     logger.info("Scaler for mixed precision training: {}".format(mixed_prec))
@@ -210,6 +211,7 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
             instance_weight=instance_weight,
             instance_loss=instance_criterion,
             normalize_mse=normalize_mse,
+            center_cos=center_cos,
         )
         va = validate_epoch(
             encoder, 
@@ -232,6 +234,7 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
             instance_weight=instance_weight,
             instance_loss=instance_criterion,
             normalize_mse=normalize_mse,
+            center_cos=center_cos,
         )
 
         log_str = (
@@ -244,8 +247,9 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
                 f" | TwoView: cons {tr['cons']:.6f}, mse {tr['cons_mse']:.6f}, inst {tr['inst']:.6f}, "
                 f"cos_tr {tr['cos']:.4f}, acc_deg_tr {tr['acc_deg']:.4f} | "
                 f"cos_val {va['cos']:.4f}, acc_deg_val {va['acc_deg']:.4f} | "
-                f"rel_drift_tr {tr['rel_drift']:.4f}, pop_drift_tr {tr['pop_drift']:.4f}, "
-                f"rel_drift_val {va['rel_drift']:.4f}, pop_drift_val {va['pop_drift']:.4f}"
+                f"cos_shuf_tr {tr['cos_shuf']:.4f}, cos_shuf_val {va['cos_shuf']:.4f} | "
+                f"pop_drift_tr {tr['pop_drift']:.4f}, pop_drift_val {va['pop_drift']:.4f}, "
+                f"drift_spread_tr {tr['drift_spread']:.4f}, drift_spread_val {va['drift_spread']:.4f}"
             )
         logger.info(log_str)
 

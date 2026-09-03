@@ -75,33 +75,44 @@ def _cls_mask(mask):
         mask.bool()
     ], dim=1)
 
-def consistency_terms(z_d, z_c, normalize_mse: bool = True, eps: float = 1e-6):
+def consistency_terms(z_d, z_c, normalize_mse: bool = True, center_cos: bool = True,
+                      eps: float = 1e-6):
     """Pull the degraded latent toward the clean latent (stop-grad on clean).
 
     The eval probe is fit on CLEAN latents and then applied to degraded ones, so this
     per-event invariance on the LATENT (pre-projector) is exactly what has to transfer.
 
-    The raw MSE is a moving target: the latent is unnormalised and its norm grows during
-    training (measured ~22 by epoch 3), so mse ~ ||z||^2 and the term's effective weight
-    creeps up through the run. With ``normalize_mse`` the displacement is instead measured
-    in units of the clean population's per-dimension spread, which is where the probe's
-    decision surface actually lives -- a 0.92-unit shift only matters relative to how far
-    apart different events are.
+    Both terms are measured AFTER removing the clean batch mean, because the raw latent
+    carries a common offset ~30x larger than the per-event spread (measured: ||mean|| 92.2
+    vs spread 3.03). On the raw latent, cosine between two DIFFERENT events of DIFFERENT
+    classes is 0.9995, so an uncentred cosine of 0.9999 says nothing about per-event
+    invariance and carries almost no gradient -- the offset satisfies it on its own.
+    Centred, the same checkpoint reads 0.854 matched against -0.003 shuffled.
 
-    Returns (cosine_loss, mse_term, mean_cosine_similarity, rel_drift, pop_drift) where
-    rel_drift = mean ||z_d - z_c|| / ||z_c||  and  pop_drift is the population-normalised
-    squared displacement. Both diagnostics are scale-free.
+    Returns (cosine_loss, mse_term, cos_matched, cos_shuffled, pop_drift, drift_spread).
+    ``cos_shuffled`` is the required control: it must sit near 0, otherwise the matched
+    figure is an artefact of the geometry rather than evidence of invariance.
     """
     z_c = z_c.detach()
-    cos = F.cosine_similarity(z_d, z_c, dim=-1)
-    diff = z_d - z_c
+    mu = z_c.mean(dim=0, keepdim=True)                    # detached: z_c already is
+    zc_r, zd_r = (z_c - mu, z_d - mu) if center_cos else (z_c, z_d)
 
-    var = z_c.var(dim=0, unbiased=False)                      # [D] spread of the clean batch
+    cos = F.cosine_similarity(zd_r, zc_r, dim=-1)
+    diff = z_d - z_c                                       # offset-free either way
+
+    var = z_c.var(dim=0, unbiased=False)                   # spread of the clean batch
     pop_drift = (diff.pow(2) / (var + eps)).mean()
     mse_term = pop_drift if normalize_mse else F.mse_loss(z_d, z_c)
 
-    rel_drift = (diff.norm(dim=-1) / (z_c.norm(dim=-1) + eps)).mean()
-    return (1.0 - cos).mean(), mse_term, cos.mean(), rel_drift.detach(), pop_drift.detach()
+    with torch.no_grad():
+        perm = torch.randperm(z_c.size(0), device=z_c.device)
+        cos_shuf = F.cosine_similarity(zd_r[perm], zc_r, dim=-1).mean()
+        spread = (z_c - mu).norm(dim=-1).mean()
+        drift_spread = diff.norm(dim=-1).mean() / (spread + eps)
+
+    return ((1.0 - cos).mean(), mse_term, cos.mean().detach(), cos_shuf,
+            pop_drift.detach(), drift_spread)
+
 
 def train_epoch(
     encoder, projector, classifier,
@@ -113,7 +124,7 @@ def train_epoch(
     pairwise=False, num_classes=4,
     scaler=None,
     two_view=False, consistency_weight=1.0, consistency_mse_weight=0.1,
-    instance_weight=0.0, instance_loss=None, normalize_mse=True,
+    instance_weight=0.0, instance_loss=None, normalize_mse=True, center_cos=True,
 ):
     if two_view and degradation is None:
         raise ValueError(
@@ -129,7 +140,7 @@ def train_epoch(
 
     total_loss = total_contrast = total_ce = 0.0
     total_cons = total_cons_mse = total_inst = total_cos = 0.0
-    total_rel_drift = total_pop_drift = 0.0
+    total_cos_shuf = total_pop_drift = total_drift_spread = 0.0
     count = 0
     scheduled_contrst_wght = not (isinstance(contrastive_weight, int) or isinstance(contrastive_weight, float))
     class_metrics = ClassificationMetrics(num_classes)
@@ -175,8 +186,8 @@ def train_epoch(
             if two_view:
                 B = latent.size(0) // 2
                 z_c, z_d = latent[:B], latent[B:]
-                loss_cons, loss_cons_mse, cos_mean, rel_drift, pop_drift = consistency_terms(
-                    z_d, z_c, normalize_mse=normalize_mse)
+                loss_cons, loss_cons_mse, cos_mean, cos_shuf, pop_drift, drift_spread = \
+                    consistency_terms(z_d, z_c, normalize_mse=normalize_mse, center_cos=center_cos)
                 loss = loss + consistency_weight * loss_cons + consistency_mse_weight * loss_cons_mse
                 if instance_weight > 0.0 and instance_loss is not None:
                     loss_inst = instance_loss(embeddings[:B], embeddings[B:])
@@ -211,8 +222,9 @@ def train_epoch(
             total_cons_mse += loss_cons_mse.item() * bs
             total_inst     += loss_inst.item() * bs
             total_cos      += cos_mean.item() * bs
-            total_rel_drift += rel_drift.item() * bs
+            total_cos_shuf += cos_shuf.item() * bs
             total_pop_drift += pop_drift.item() * bs
+            total_drift_spread += drift_spread.item() * bs
             deg_metrics.update(logits[B:], labels[B:])
 
     out = {
@@ -227,8 +239,9 @@ def train_epoch(
             "cons_mse": total_cons_mse / count,
             "inst":     total_inst     / count,
             "cos":      total_cos      / count,
-            "rel_drift": total_rel_drift / count,
+            "cos_shuf": total_cos_shuf / count,
             "pop_drift": total_pop_drift / count,
+            "drift_spread": total_drift_spread / count,
             "acc_deg":  deg_metrics.compute_metrics()["acc"],
         })
     return out
@@ -242,7 +255,7 @@ def validate_epoch(
     contrastive_weight=0.05,
     pairwise=False, num_classes=4,
     two_view=False, consistency_weight=1.0, consistency_mse_weight=0.1,
-    instance_weight=0.0, instance_loss=None, normalize_mse=True,
+    instance_weight=0.0, instance_loss=None, normalize_mse=True, center_cos=True,
 ):
     if two_view and degradation is None:
         raise ValueError(
@@ -258,7 +271,7 @@ def validate_epoch(
 
     total_loss = total_contrast = total_ce = 0.0
     total_cons = total_cons_mse = total_inst = total_cos = 0.0
-    total_rel_drift = total_pop_drift = 0.0
+    total_cos_shuf = total_pop_drift = total_drift_spread = 0.0
     count = 0
     scheduled_contrst_wght = not (isinstance(contrastive_weight, int) or isinstance(contrastive_weight, float))
     class_metrics = ClassificationMetrics(num_classes)
@@ -298,8 +311,8 @@ def validate_epoch(
         if two_view:
             B = latent.size(0) // 2
             z_c, z_d = latent[:B], latent[B:]
-            loss_cons, loss_cons_mse, cos_mean, rel_drift, pop_drift = consistency_terms(
-                z_d, z_c, normalize_mse=normalize_mse)
+            loss_cons, loss_cons_mse, cos_mean, cos_shuf, pop_drift, drift_spread = \
+                    consistency_terms(z_d, z_c, normalize_mse=normalize_mse, center_cos=center_cos)
             loss = loss + consistency_weight * loss_cons + consistency_mse_weight * loss_cons_mse
             if instance_weight > 0.0 and instance_loss is not None:
                 loss_inst = instance_loss(embeddings[:B], embeddings[B:])
@@ -318,8 +331,9 @@ def validate_epoch(
             total_cons_mse += loss_cons_mse.item() * bs
             total_inst     += loss_inst.item() * bs
             total_cos      += cos_mean.item() * bs
-            total_rel_drift += rel_drift.item() * bs
+            total_cos_shuf += cos_shuf.item() * bs
             total_pop_drift += pop_drift.item() * bs
+            total_drift_spread += drift_spread.item() * bs
             deg_metrics.update(logits[B:], labels[B:])
 
     out = {
@@ -334,8 +348,9 @@ def validate_epoch(
             "cons_mse": total_cons_mse / count,
             "inst":     total_inst     / count,
             "cos":      total_cos      / count,
-            "rel_drift": total_rel_drift / count,
+            "cos_shuf": total_cos_shuf / count,
             "pop_drift": total_pop_drift / count,
+            "drift_spread": total_drift_spread / count,
             "acc_deg":  deg_metrics.compute_metrics()["acc"],
         })
     return out
