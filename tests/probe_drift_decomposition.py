@@ -105,7 +105,12 @@ def main():
     ghat = g / g.norm(dim=1, keepdim=True).clamp(min=1e-12)
 
     # (b) global: logistic weight vector on clean latents
-    lr = LogisticRegression(max_iter=2000).fit(z0.numpy(), (y0.numpy() == 1).astype(int))
+    # Fit on the SAME train split the EvalMLP probe uses, so the two AUCs are comparable.
+    lr = LogisticRegression(max_iter=2000).fit(Xtr.numpy(), (ytr.numpy() == 1).astype(int))
+    def lin_auc(z, y):
+        from sklearn.metrics import roc_auc_score
+        return float(roc_auc_score((y.numpy() == 1).astype(int), lr.predict_proba(z.numpy())[:, 1]))
+    auc0_lin = lin_auc(z0, y0)
     w = torch.tensor(lr.coef_[0], dtype=torch.float32, device=device)
     what = (w / w.norm()).unsqueeze(0)
 
@@ -129,10 +134,10 @@ def main():
     print(f"clean AUC {auc0:.4f}   clean spread (mean ||z-mu||) {spread:.3f}")
     print(f"RANDOM-DIRECTION BASELINE |cos|: vs probe-grad {base_g:.3f}, vs logistic-w {base_w:.3f}")
     print("  (a fraction at or below this means the motion is no more probe-aligned than chance)\n")
+    print(f"clean AUC: EvalMLP (grader's, nonlinear) {auc0:.4f}   logistic (linear) {auc0_lin:.4f}\n")
     print(f"{'family':8s} {'sev':>4s} {'|dz|/sprd':>10s} {'alongG':>7s} {'vs rnd':>7s} "
-          f"{'alongW':>7s} {'shared':>7s} {'maha':>7s} {'maha/raw':>9s} {'AUC':>7s} {'dAUC':>8s}")
-    print(f"{'':8s} {'':>4s} {'':>10s} {'':>7s} {'':>7s} {'(rnd '+f'{base_w:.2f}'+')':>7s} "
-          f"{'frac':>7s}")
+          f"{'alongW':>7s} {'shared':>7s} {'maha':>7s} {'MLP_AUC':>7s} {'dMLP':>8s} "
+          f"{'LIN_AUC':>8s} {'dLIN':>9s}")
 
     rows = []
     for fam in FAMILIES:
@@ -147,6 +152,7 @@ def main():
                                     .clamp(min=0)).mean())
             raw = float(n.mean())
             auc = float(ev.probe_auc(probe, zd, yd, num_classes, device))
+            aucl = lin_auc(zd, yd)
             # Is dz one shared shift of the whole population, or per-event scatter? A shared
             # shift is a very different failure: the cloud moves off the manifold the probe was
             # fit on, rather than events crossing the boundary individually.
@@ -154,10 +160,11 @@ def main():
             shared = float(dzbar.norm() / max(raw, 1e-9))
             cos_bar_w = float((dzbar / dzbar.norm().clamp(min=1e-12) * what).sum())
             rows.append(dict(family=fam, severity=s, rel=raw / spread, along_g=fg, along_w=fw,
-                             maha=maha, raw=raw, auc=auc, shared=shared, cos_shift_w=cos_bar_w))
+                             maha=maha, raw=raw, auc=auc, shared=shared, cos_shift_w=cos_bar_w,
+                             auc_linear=aucl))
             print(f"{fam:8s} {s:4.1f} {raw/spread:10.3f} {fg:7.3f} {fg/base_g:7.2f} "
-                  f"{fw:7.3f} {shared:7.3f} {maha:7.3f} {maha/max(raw,1e-9):9.3f} "
-                  f"{auc:7.4f} {auc-auc0:+8.4f}")
+                  f"{fw:7.3f} {shared:7.3f} {maha:7.3f} {auc:7.4f} {auc-auc0:+8.4f} "
+                  f"{aucl:8.4f} {aucl-auc0_lin:+9.4f}")
 
     rank = lambda x: np.argsort(np.argsort(x))
 
@@ -203,6 +210,16 @@ def main():
     for k, lbl in MEASURES:
         pr, sp = corr_over(fam_rows, k)
         print(f"  {lbl:28s} r = {pr:+.3f}   rho = {sp:+.3f}")
+
+    am = np.array([r["auc"] for r in rows]); al = np.array([r["auc_linear"] for r in rows])
+    print(f"\nNONLINEAR vs LINEAR probe on the SAME latents (the along_w question):")
+    print(f"  clean:         MLP {auc0:.4f}   linear {auc0_lin:.4f}")
+    print(f"  mean degraded: MLP {am.mean():.4f}   linear {al.mean():.4f}")
+    print(f"  mean drop:     MLP {auc0-am.mean():+.4f}   linear {auc0_lin-al.mean():+.4f}")
+    print(f"  worst point:   MLP {am.min():.4f}   linear {al.min():.4f}")
+    print("  dz is near-orthogonal to the linear discriminant (along_w ~0.02 vs 0.34 chance).")
+    print("  If the linear probe degrades much LESS, the damage is the nonlinear probe")
+    print("  extrapolating outside the clean latent's support, not a class boundary being crossed.")
 
     os.makedirs(args.out, exist_ok=True)
     path = os.path.join(args.out, f"probedrift-{args.tag}.json")
