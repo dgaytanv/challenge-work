@@ -419,7 +419,9 @@ class ClassificationMetrics:
             self.fn[cls] += (~cls_preds & cls_labels).sum().item()
             self.tn[cls] += (~cls_preds & ~cls_labels).sum().item()
 
-        self.all_probs.append(F.softmax(logits, dim=1).detach().cpu())
+        # .float() first: under autocast logits are fp16 and the softmax/roc_auc_score
+        # round-trip yields nan for the train-line AUC (found by WP-D).
+        self.all_probs.append(F.softmax(logits.float(), dim=1).detach().cpu())
         self.all_labels.append(labels.detach().cpu())
 
     def compute_metrics(self) -> dict:

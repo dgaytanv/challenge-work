@@ -37,5 +37,5 @@ hyperparameters:
   two_view: true
   consistency_weight: 1.0        # weight on mean(1 - cos(z_degraded, z_clean.detach()))
   consistency_mse_weight: 0.1    # weight on mse(z_degraded, z_clean.detach())
-  instance_weight: 0.0           # SimCLR NT-Xent, positives = the other view only
+  instance_weight: 0.1           # SimCLR NT-Xent, positives = the other view only
   seed: null                     # set an int for reproducible runs (acceptance test)

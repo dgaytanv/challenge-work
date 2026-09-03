@@ -32,7 +32,7 @@ NEVENTS = STEPS * BATCH
 def load_stock_training():
     """Import train_epoch as it exists on the `integration` branch (before WP-C)."""
     blob = subprocess.check_output(
-        ["git", "show", "integration:src/embedding/training.py"], text=True
+        ["git", "show", "origin/integration:src/embedding/training.py"], text=True
     )
     with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
         f.write(blob)
