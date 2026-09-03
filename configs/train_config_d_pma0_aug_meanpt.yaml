@@ -1,8 +1,7 @@
-# SUBMISSION scaffold config, from train_config_d_deepsets_aug_meanpt.yaml.
-# preproc_type below MUST match what the checkpoint was trained with: PFPreProcessor and
-# PFPreProcessorMeanPt have identical state_dict keys, so a mismatch loads silently and
-# computes the wrong pt feature.
-model_name: robust_tagging
+# WP-D: PMAEncoder(num_layers=0) + PFPreProcessorMeanPt - the union of the two best directions.
+# Planner exception to the convergence freeze; candidate only if it benches by 22:45.
+# Bench with --encoder_class PMAEncoder and --train_cfg THIS file (preproc_type is a data: key).
+model_name: rt_d_pma0_aug_meanpt
 data:
   preproc_type: PFPreProcessorMeanPt
   val_split: 0.1
@@ -17,7 +16,7 @@ hyperparameters:
   lr_warmup: 0.05
   embed_size: 128
   num_heads: 8
-  num_layers: 4
+  num_layers: 0
   latent_dim: 6
   proj_dim: 12
   linear_dim: null
@@ -25,3 +24,5 @@ hyperparameters:
   contrastive_weight: 0.05
   contrastive_max: null
   contrastive_warmup: 0.05
+  encoder_class: PMAEncoder
+  use_degradation: true
