@@ -1,0 +1,41 @@
+# WP-D: Deep Sets + two-view + JSD logit consistency (WP-C b9c78d0).
+# The arm that tests the direction-aware hypothesis: the classifier's four class
+# directions are a label-legal proxy for the probe directions the drift decomposition
+# showed actually matter. Prediction to check against d-deepsets-twoview: d_par should
+# fall proportionally MORE than d_perp. Augmentation alone did the opposite
+# (d_par/spread 0.211 -> 0.261 while d_perp/spread fell 0.810 -> 0.653).
+# If mean_area improves while the split is unchanged, JSD is working for some other
+# reason and that must be reported, not banked.
+model_name: rt_d_deepsets_twoview_jsd
+data:
+  preproc_type: PFPreProcessor
+  val_split: 0.1
+  pairwise: false
+hyperparameters:
+  num_epochs: 25
+  early_stopping_patience: 5
+  batch_size: 256
+  mixed_prec: true
+  lr: 0.001
+  lr_min: 0.0
+  lr_warmup: 0.05
+  embed_size: 128
+  num_heads: 8
+  num_layers: 4
+  latent_dim: 6
+  proj_dim: 12
+  linear_dim: null
+  contrast_temp: 0.07
+  contrastive_weight: 0.05
+  contrastive_max: null
+  contrastive_warmup: 0.05
+  two_view: true
+  consistency_weight: 1.0
+  consistency_mse_weight: 0.1
+  instance_weight: 0.0
+  consistency_mse_normalized: true
+  consistency_cos_centered: true
+  logit_consistency_weight: 1.0
+  seed: null
+  encoder_class: DeepSetsEncoder
+  use_degradation: true
