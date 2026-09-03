@@ -1,0 +1,39 @@
+# WP-D: Deep Sets + two-view on the FULL 12 GB train set. PREPARED, NOT LAUNCHED -
+# awaiting the planner's ruling after WP-E reports that file's layout.
+# Run with --data ~/hack-data/C9_robust_tagging/train/robust_tagging_train_data.pt
+# Unknowns to settle before launching: (a) does the full file have padding rows (the
+# small files have none), which changes nothing for my masked pooling but does change
+# preproc's BatchNorm statistics; (b) does it fit in host RAM - train.py loads the whole
+# tensor on CPU then index_selects, so peak is ~2x file size; (c) epochs, since 15x the
+# data at ~40 s/epoch on 80k would be ~10 min/epoch.
+model_name: rt_d_deepsets_twoview_fulldata
+data:
+  preproc_type: PFPreProcessor
+  val_split: 0.1
+  pairwise: false
+hyperparameters:
+  num_epochs: 25
+  early_stopping_patience: 5
+  batch_size: 256
+  mixed_prec: true
+  lr: 0.001
+  lr_min: 0.0
+  lr_warmup: 0.05
+  embed_size: 128
+  num_heads: 8
+  num_layers: 4
+  latent_dim: 6
+  proj_dim: 12
+  linear_dim: null
+  contrast_temp: 0.07
+  contrastive_weight: 0.05
+  contrastive_max: null
+  contrastive_warmup: 0.05
+  two_view: true
+  consistency_weight: 1.0
+  consistency_mse_weight: 0.1
+  instance_weight: 0.0
+  consistency_mse_normalized: true
+  seed: null
+  encoder_class: DeepSetsEncoder
+  use_degradation: true
