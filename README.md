@@ -34,3 +34,32 @@ Special thanks to Roy Cruz Candelaria, Maciej Glowacki, and Mehrnoosh Moallemi f
 At eval time the model sees both background and signal events and outputs a per-event anomaly score, scored via AUC vs. degradation severity. A robust model keeps a high AUC as more of the detector goes dark; your score is the area under that curve. `eval.py` overlays a red "(No degradation)" reference curve against your model's ("Your solution") on the same plot.
 
 `eval.py` here uses **your own** `degradation.py` to simulate severity locally — it's for testing your own approach, not the official scoring run. For judging, we'll degrade the eval set ourselves with a method we're not disclosing in advance (conceptually it kills off geometric η–φ regions, similar to real detector dead zones), so solutions aren't tuned to the exact grading procedure.
+
+## How to reproduce (WP-D submission: Deep Sets + MeanPt)
+
+Encoder: `DeepSetsEncoder` (a permutation-symmetric set encoder), aliased to `TransformerEncoder`
+at the end of `src/embedding/models.py` so the organisers' `eval.py` builds it unchanged. It takes
+that constructor signature and forward contract exactly; `eval.py` passes no keyword arguments, so
+`pooling="mean+max"` and `count_feature=False` are constructor DEFAULTS rather than config keys.
+
+Preprocessor: `PFPreProcessorMeanPt` — pt encoded as `log(pt_i / mean surviving pt)`. This matters
+and must match: `PFPreProcessor` and `PFPreProcessorMeanPt` have identical `state_dict` keys, so a
+mismatched `preproc_type` loads cleanly and silently computes the wrong feature.
+
+```bash
+python train.py \
+  --data_cfg configs/data_config_collide1m_small.yaml \
+  --train_cfg configs/train_config.yaml \
+  --data ~/hack-data/C9_robust_tagging/train/robust_tagging_train_data_small.pt \
+  --outdir checkpoints
+```
+Data: `robust_tagging_train_data_small.pt` ([80000, 200, 8], four background classes).
+Training used WP-B's dead-region generator as augmentation; 25 epochs, batch 256, patience 5.
+
+Shipped checkpoint: `checkpoints/rt_d_deepsets_aug_meanpt_encoder_20260903_214738.pth` (the only
+`.pth` on this branch, via a `.gitignore` exception, because the organisers' notebook selects with
+`sorted(glob("checkpoints/*.pth"))[-1]`).
+
+Measured (see `~/hackathon-shared/runs/`):
+- bench `mean_area` 0.8186 +- 0.0007, clean AUC 0.9066 +- 0.0006 (5 probe refits, 20k events)
+- stock anchor for comparison: `mean_area` 0.7734, clean AUC 0.8605

@@ -6,3 +6,11 @@ eval_plots/
 logs/
 *.pth
 *.log
+
+# --- SUBMISSION EXCEPTION -------------------------------------------------------------
+# The organisers' notebook does sorted(glob("checkpoints/*.pth"))[-1] and asserts if it is
+# empty, so the submission branch must ship EXACTLY ONE checkpoint. Everything else under
+# checkpoints/ stays ignored, including checkpoints/aux/ and checkpoints/smokes/.
+!checkpoints/
+checkpoints/*
+!checkpoints/rt_d_deepsets_aug_meanpt_encoder_20260903_214738.pth
