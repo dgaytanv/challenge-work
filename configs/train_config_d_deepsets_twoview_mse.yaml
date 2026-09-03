@@ -7,6 +7,15 @@
 # so the centred cosine does still see a common translation. Running it anyway because a
 # different weighting may help for other reasons, but the result should not be attributed
 # to the rigid-shift argument without re-checking.
+# early_stopping_patience RAISED 5 -> 25 (i.e. disabled) for two-view arms ONLY.
+# Reason, measured: in the two-view path the Projector's BatchNorm running stats make
+# eval-mode classification collapse (val acc pinned at 0.2500 = chance, one class
+# predicted for every event) while train-mode acc is 0.66. The LATENT is unaffected -
+# per-dim std is identical between modes - so the encoder is fine and only the
+# composite val loss is corrupted. d-deepsets-twoview therefore early-stopped at
+# epoch 6 and shipped its EPOCH 1 checkpoint. Single-view arms show no such gap.
+# Selection should use val AUC (C's _bestauc file) rather than composite val loss.
+# This is a deliberate deviation from the Phase-1 protocol, flagged to the planner.
 model_name: rt_d_deepsets_twoview_mse
 data:
   preproc_type: PFPreProcessor
@@ -14,7 +23,7 @@ data:
   pairwise: false
 hyperparameters:
   num_epochs: 25
-  early_stopping_patience: 5
+  early_stopping_patience: 25
   batch_size: 256
   mixed_prec: true
   lr: 0.001
