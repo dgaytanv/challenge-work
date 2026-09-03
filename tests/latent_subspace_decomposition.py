@@ -117,6 +117,19 @@ frac = (d_par.norm(dim=-1) / d.norm(dim=-1).clamp(min=1e-12)).mean()
 sq = (d_par.pow(2).sum(-1) / d.pow(2).sum(-1).clamp(min=1e-12)).mean()
 print(f"  fraction of drift the probe can see     {frac:.3f}  (by magnitude)")
 print(f"                                          {sq:.3f}  (by SQUARED magnitude - what an MSE consistency term weights)")
+# Is the drift a RIGID SHIFT of the whole cloud, or per-event motion? A common translation
+# is penalised by an MSE consistency term but is invisible to a centred cosine term (both
+# views are centred by their own batch mean), so which of the two dominates decides which
+# term can act on it at all.
+d_common = d.mean(dim=0, keepdim=True).expand_as(d)
+d_resid = d - d_common
+print("rigid-shift split of the drift:")
+print(f"  common (rigid) ||mean(d)||              {d_common.norm(dim=-1).mean():.4f}  ({d_common.norm(dim=-1).mean()/spread:.3f} x spread)")
+print(f"  per-event residual ||d - mean(d)||      {d_resid.norm(dim=-1).mean():.4f}  ({d_resid.norm(dim=-1).mean()/spread:.3f} x spread)")
+rigid_sq = (d_common.pow(2).sum(-1).mean() / d.pow(2).sum(-1).mean())
+print(f"  rigid share of the drift                {rigid_sq:.3f}  (by squared magnitude)")
+print(f"  AUC on z_c + d_common (rigid only)      {auc(z_c + d_common):.4f}")
+print(f"  AUC on z_c + d_resid  (per-event only)  {auc(z_c + d_resid):.4f}")
 print("operational check - feed the probe one component at a time:")
 print(f"  AUC on clean z_c                        {auc(z_c):.4f}")
 print(f"  AUC on z_c + d_perp   (harmless part)   {auc(z_c + d_perp):.4f}")

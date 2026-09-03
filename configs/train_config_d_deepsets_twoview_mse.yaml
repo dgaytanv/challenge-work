@@ -1,0 +1,41 @@
+# WP-D: two-view with the weighting flipped toward the population-normalised MSE
+# (consistency_weight 0.1, consistency_mse_weight 1.0). Planner arm.
+# NOTE: the stated rationale does not hold on this encoder - see the report. Measured on
+# d-deepsets-aug at severity 0.5, the drift is 41% rigid by squared magnitude (not 'most'),
+# and the rigid part is the LESS harmful half: rigid-only costs 0.0099 AUC while the
+# per-event residual costs 0.0353. Also, C centres both views by the SAME clean batch mean,
+# so the centred cosine does still see a common translation. Running it anyway because a
+# different weighting may help for other reasons, but the result should not be attributed
+# to the rigid-shift argument without re-checking.
+model_name: rt_d_deepsets_twoview_mse
+data:
+  preproc_type: PFPreProcessor
+  val_split: 0.1
+  pairwise: false
+hyperparameters:
+  num_epochs: 25
+  early_stopping_patience: 5
+  batch_size: 256
+  mixed_prec: true
+  lr: 0.001
+  lr_min: 0.0
+  lr_warmup: 0.05
+  embed_size: 128
+  num_heads: 8
+  num_layers: 4
+  latent_dim: 6
+  proj_dim: 12
+  linear_dim: null
+  contrast_temp: 0.07
+  contrastive_weight: 0.05
+  contrastive_max: null
+  contrastive_warmup: 0.05
+  two_view: true
+  consistency_weight: 0.1
+  consistency_mse_weight: 1.0
+  instance_weight: 0.0
+  consistency_mse_normalized: true
+  consistency_cos_centered: true
+  seed: null
+  encoder_class: DeepSetsEncoder
+  use_degradation: true
