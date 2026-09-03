@@ -33,6 +33,8 @@ def main():
     ap.add_argument("--train_cfg", default=None)
     ap.add_argument("--tag", default="")
     ap.add_argument("--events", type=int, default=6000)
+    ap.add_argument("--data", default=DATA, help="eval file by default; pass the TRAIN file to "
+                    "reproduce a measurement taken on what the training loss sees")
     args = ap.parse_args()
 
     repo = os.path.abspath(os.path.expanduser(args.repo))
@@ -57,7 +59,21 @@ def main():
     ).to(device)
     enc.load_state_dict(ck["encoder"]); enc.eval()
 
-    feats, labels = load_data(DATA, map_location="cpu", max_events=args.events)
+    # capture the bottleneck's input h so the offset can be attributed: ||W E[h]|| vs ||W||_F ||E[h]||
+    h_sum, h_n = {}, {}
+    head = None
+    for name in ("bottleneck", "rho", "out_proj"):
+        if hasattr(enc, name) and isinstance(getattr(enc, name), torch.nn.Module):
+            head = getattr(enc, name); break
+    if head is not None:
+        def _hook(_m, inp):
+            v = inp[0].detach()
+            v = v.reshape(-1, v.shape[-1]).double()
+            h_sum["s"] = h_sum.get("s", 0) + v.sum(0)
+            h_n["n"] = h_n.get("n", 0) + v.shape[0]
+        head.register_forward_pre_hook(_hook)
+
+    feats, labels = load_data(args.data, map_location="cpu", max_events=args.events)
     lat, lab, _ = ev.embed_dataset(preproc, enc, feats, labels, cfg_data, ck["norm_constants"],
                                    device, batch_size=512)
     mu = lat.mean(0)
@@ -73,6 +89,10 @@ def main():
             if k.endswith("weight"): weight, wkey = ck["encoder"][k], k
 
     print(f"tag={args.tag or os.path.basename(args.ckpt)}  encoder={args.encoder_class}")
+    # self-label with the epoch stored in the checkpoint: a live file is rewritten as its run
+    # progresses, so a measurement that does not record the epoch is not reproducible
+    print(f"  data={os.path.basename(args.data)}  events={lat.shape[0]}  "
+          f"ckpt_epoch={ck.get('epoch', '?')}  ckpt={os.path.basename(args.ckpt)}")
     print(f"  models={models.__file__}")
     print(f"  ||E[z]||            = {offset:.4f}      <- offset (numerator)")
     print(f"  per-event spread     = {spread:.4f}      <- mean ||z - E[z]|| (denominator)")
@@ -83,13 +103,23 @@ def main():
         nb = float(bias.norm())
         print(f"  {bkey:20s} ||b||   = {nb:.4f}  ({100*nb/max(offset,1e-9):.1f}% of the offset)")
         print(f"  feature term ||E[z]-b||          = {float((mu.cpu()-bias.cpu()).norm()):.4f}")
+    if "s" in h_sum and weight is not None:
+        Eh = (h_sum["s"] / h_n["n"]).float().cpu()
+        W = weight.detach().cpu().float()
+        WEh = float((W @ Eh).norm())
+        print(f"  ||E[h]|| (bottleneck input) = {float(Eh.norm()):.4f}")
+        print(f"  ||W E[h]||                  = {WEh:.4f}   "
+              f"(offset is {100*WEh/max(offset,1e-9):.1f}% explained by the feature term)")
+        print(f"  ATTRIB: offset = ||W E[h] + b||; W and E[h] each scale it linearly, so compare "
+              f"||W||_F and ||E[h]|| across checkpoints to see which grew")
     # spread collapse shows up per dimension, not just in the mean norm
     sd = lat.std(0)
     print(f"  per-dim std          = {[round(float(v),3) for v in sd]}")
     print(f"  per-dim mean         = {[round(float(v),3) for v in mu.cpu()]}")
+    _eh = float((h_sum["s"] / h_n["n"]).norm()) if "s" in h_sum else float("nan")
     print(f"  RATIO-CSV,{args.tag},{offset:.4f},{spread:.4f},{offset/max(spread,1e-9):.3f},"
           f"{float(weight.norm()) if weight is not None else float('nan'):.4f},"
-          f"{float(bias.norm()) if bias is not None else float('nan'):.4f}")
+          f"{float(bias.norm()) if bias is not None else float('nan'):.4f},{_eh:.4f}")
 
 
 if __name__ == "__main__":

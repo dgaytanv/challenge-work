@@ -122,7 +122,8 @@ def main():
     base_g = float((rnd * ghat).sum(1).abs().mean())
     base_w = float((rnd * what).sum(1).abs().mean())
 
-    print(f"tag={args.tag} encoder={args.encoder_class} latent_dim={d} events={z0.shape[0]}")
+    print(f"tag={args.tag} encoder={args.encoder_class} latent_dim={d} events={z0.shape[0]} "
+          f"ckpt_epoch={ck.get('epoch', '?')}")
     # prove which repo's code was actually used (the single editable install is a trap here)
     print(f"models module: {models.__file__}")
     print(f"clean AUC {auc0:.4f}   clean spread (mean ||z-mu||) {spread:.3f}")
@@ -186,17 +187,18 @@ def main():
         print(f"{fam:8s} " + " ".join(f"{corr_over(rs, k)[0]:+17.3f}" for k, _ in MEASURES))
 
     print(f"\nfamily-averaged view (mean over severities per family):")
-    print(f"{'family':8s} {'|dz|/sprd':>10s} {'alongG':>7s} {'vs rnd':>7s} {'maha':>7s} "
-          f"{'vis|dz|':>8s} {'mean AUC':>9s}")
+    print(f"{'family':8s} {'|dz|/sprd':>10s} {'alongG':>7s} {'vs rnd':>7s} {'shared':>7s} "
+          f"{'maha':>7s} {'vis|dz|':>8s} {'mean AUC':>9s}")
     fam_rows = []
     for fam in FAMILIES:
         rs = [r for r in rows if r["family"] == fam]
-        m = {k: float(np.mean([r[k] for r in rs])) for k in ("rel", "along_g", "maha", "auc")}
+        m = {k: float(np.mean([r[k] for r in rs]))
+             for k in ("rel", "along_g", "maha", "auc", "shared")}
         m["vis"] = float(np.mean([r["rel"] * r["along_g"] for r in rs]))
         m["family"] = fam
         fam_rows.append(m)
         print(f"{fam:8s} {m['rel']:10.3f} {m['along_g']:7.3f} {m['along_g']/base_g:7.2f} "
-              f"{m['maha']:7.3f} {m['vis']:8.3f} {m['auc']:9.4f}")
+              f"{m['shared']:7.3f} {m['maha']:7.3f} {m['vis']:8.3f} {m['auc']:9.4f}")
     print(f"\nacross the 5 family averages, pearson r vs mean AUC:")
     for k, lbl in MEASURES:
         pr, sp = corr_over(fam_rows, k)
