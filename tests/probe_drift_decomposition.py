@@ -129,7 +129,9 @@ def main():
     print(f"RANDOM-DIRECTION BASELINE |cos|: vs probe-grad {base_g:.3f}, vs logistic-w {base_w:.3f}")
     print("  (a fraction at or below this means the motion is no more probe-aligned than chance)\n")
     print(f"{'family':8s} {'sev':>4s} {'|dz|/sprd':>10s} {'alongG':>7s} {'vs rnd':>7s} "
-          f"{'alongW':>7s} {'maha':>7s} {'maha/raw':>9s} {'AUC':>7s} {'dAUC':>8s}")
+          f"{'alongW':>7s} {'shared':>7s} {'maha':>7s} {'maha/raw':>9s} {'AUC':>7s} {'dAUC':>8s}")
+    print(f"{'':8s} {'':>4s} {'':>10s} {'':>7s} {'':>7s} {'(rnd '+f'{base_w:.2f}'+')':>7s} "
+          f"{'frac':>7s}")
 
     rows = []
     for fam in FAMILIES:
@@ -144,10 +146,17 @@ def main():
                                     .clamp(min=0)).mean())
             raw = float(n.mean())
             auc = float(ev.probe_auc(probe, zd, yd, num_classes, device))
+            # Is dz one shared shift of the whole population, or per-event scatter? A shared
+            # shift is a very different failure: the cloud moves off the manifold the probe was
+            # fit on, rather than events crossing the boundary individually.
+            dzbar = dz.mean(0, keepdim=True)
+            shared = float(dzbar.norm() / max(raw, 1e-9))
+            cos_bar_w = float((dzbar / dzbar.norm().clamp(min=1e-12) * what).sum())
             rows.append(dict(family=fam, severity=s, rel=raw / spread, along_g=fg, along_w=fw,
-                             maha=maha, raw=raw, auc=auc))
+                             maha=maha, raw=raw, auc=auc, shared=shared, cos_shift_w=cos_bar_w))
             print(f"{fam:8s} {s:4.1f} {raw/spread:10.3f} {fg:7.3f} {fg/base_g:7.2f} "
-                  f"{fw:7.3f} {maha:7.3f} {maha/max(raw,1e-9):9.3f} {auc:7.4f} {auc-auc0:+8.4f}")
+                  f"{fw:7.3f} {shared:7.3f} {maha:7.3f} {maha/max(raw,1e-9):9.3f} "
+                  f"{auc:7.4f} {auc-auc0:+8.4f}")
 
     rank = lambda x: np.argsort(np.argsort(x))
 
@@ -160,7 +169,8 @@ def main():
         return float(np.corrcoef(v, aa)[0, 1]), float(np.corrcoef(rank(v), rank(aa))[0, 1])
 
     MEASURES = [("rel", "raw |dz| / spread"), ("maha", "Mahalanobis |dz|"),
-                ("along_g", "fraction along probe grad"), ("vis", "ABSOLUTE probe-visible |dz|")]
+                ("along_g", "fraction along probe grad"), ("vis", "ABSOLUTE probe-visible |dz|"),
+                ("shared", "shared-shift fraction")]
 
     print(f"\nwhich displacement measure predicts AUC? pooled over all {len(rows)} points "
           f"(pearson / spearman)")
