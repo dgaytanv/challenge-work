@@ -115,7 +115,15 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
         X_tr, y_tr, X_val, y_val, device=device, batch_size=batch_size, pfcands=pfcands
     )
 
-    degradation = Degradation(severity=None).to(device).train()
+    # Two modules by planner ruling: symmetries are shared by both views, dead regions
+    # are what distinguishes the degraded view (and carry the curriculum counter).
+    symmetry = Degradation(
+        severity=None, s_max=0.0, p_clean=1.0, curriculum=False,
+        p_charged_only=0.0, p_neutral_only=0.0, p_pt_scale=0.0,
+    ).to(device).train() if two_view else None
+    degradation = Degradation(
+        severity=None, rotate_phi=not two_view, reflect_eta=not two_view,
+    ).to(device).train()
 
     preproc_class = getattr(importlib.import_module("embedding.preprocs"), preproc_type)
 
@@ -188,6 +196,7 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
             optimizer,
             preproc,
             degradation=degradation,
+            symmetry=symmetry,
             scheduler=scheduler, 
             contrastive_weight=contrastive_weight if contrastive_max is None else contrastive_schedule,
             pairwise=pairwise, 
@@ -210,6 +219,7 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
             device,
             preproc,
             degradation=degradation,
+            symmetry=symmetry,
             contrastive_weight=contrastive_weight if contrastive_max is None else contrastive_schedule,
             pairwise=pairwise, 
             num_classes=num_classes,
