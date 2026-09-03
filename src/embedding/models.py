@@ -334,3 +334,168 @@ class RegressionHead(nn.Module):
         x = self.relu(x)
         x = self.fc2(x)
         return x
+
+# ---------------------------------------------------------------------------
+# WP-D: permutation-symmetric set encoders.
+#
+# Both take the SAME constructor signature and forward contract as
+# TransformerEncoder, so eval.py / bench_eval.py can build them unchanged:
+#   forward(x, pairwise_feats=None, mask=None) -> latent [B, latent_dim]
+# with mask [B, N+1] (CLS slot first, True = padded). Dead rows (all-zero
+# features, left behind by the degradation) are OR'd into the mask, exactly as
+# TransformerEncoder does, so pooling sees only surviving candidates.
+# ---------------------------------------------------------------------------
+
+_MASK_FILL = -1e4  # finite so it survives fp16 autocast
+
+
+def _survivors(x: torch.Tensor, mask: Union[None, torch.Tensor]) -> torch.Tensor:
+    """[B, N] bool, True where the candidate is real and not zeroed."""
+    B, N, _ = x.shape
+    dead = (x.abs().sum(dim=-1) == 0)
+    if mask is not None:
+        dead = dead | mask[:, 1:].bool()
+    keep = ~dead
+    # Guard the all-dead event: keep one slot so pooling and attention stay finite.
+    empty = ~keep.any(dim=1)
+    if empty.any():
+        keep = keep.clone()
+        keep[empty, 0] = True
+    return keep
+
+
+def _masked_mean_max(h: torch.Tensor, keep: torch.Tensor):
+    """Masked mean and max over the token axis. Divides by the surviving count."""
+    k = keep.unsqueeze(-1).to(h.dtype)
+    count = k.sum(dim=1).clamp(min=1.0)                       # [B, 1]
+    mean = (h * k).sum(dim=1) / count
+    mx = h.masked_fill(~keep.unsqueeze(-1), _MASK_FILL).max(dim=1).values
+    return mean, mx, count
+
+
+def _phi_mlp(num_features: int, embed_size: int) -> nn.Module:
+    return nn.Sequential(
+        nn.Linear(num_features, embed_size),
+        nn.LayerNorm(embed_size),
+        nn.GELU(),
+        nn.Linear(embed_size, embed_size),
+        nn.LayerNorm(embed_size),
+        nn.GELU(),
+    )
+
+
+class DeepSetsEncoder(nn.Module):
+    """Deep Sets: per-particle MLP, masked mean+max pooling, MLP head.
+
+    Deleting candidates changes the pooled summary only through the terms they
+    contributed, so the latent moves smoothly as a dead region grows. O(N).
+    `count_feature` appends log(surviving count) to the pooled vector.
+    """
+
+    def __init__(
+            self,
+            num_features: int,
+            embed_size: int,
+            latent_dim: int,
+            num_heads: int = 8,
+            num_layers: int = 4,
+            linear_dim: Union[int, None] = None,
+            num_tokens: Union[int, None] = None,
+            pairwise: bool = False,
+            count_feature: bool = False,
+        ):
+        super().__init__()
+        self.pairwise = pairwise
+        self.count_feature = count_feature
+        self.phi = _phi_mlp(num_features, embed_size)
+        pooled_dim = 2 * embed_size + (1 if count_feature else 0)
+        self.norm_pooled = nn.LayerNorm(pooled_dim)
+        self.rho = nn.Sequential(
+            nn.Linear(pooled_dim, embed_size),
+            nn.GELU(),
+            nn.Linear(embed_size, latent_dim),
+        )
+
+    def forward(self, x: torch.Tensor, pairwise_feats: Union[None, torch.Tensor] = None, mask: Union[None, torch.Tensor] = None):
+        keep = _survivors(x, mask)
+        h = self.phi(x) * keep.unsqueeze(-1).to(x.dtype)
+        mean, mx, count = _masked_mean_max(h, keep)
+        pooled = torch.cat([mean, mx], dim=-1)
+        if self.count_feature:
+            pooled = torch.cat([pooled, torch.log(count)], dim=-1)
+        return self.rho(self.norm_pooled(pooled))
+
+
+class PMAPooling(nn.Module):
+    """Pooling by multihead attention (Set Transformer): k learned seed queries."""
+
+    def __init__(self, embed_dim: int, num_heads: int, num_seeds: int = 4):
+        super().__init__()
+        assert embed_dim % num_heads == 0
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
+        self.num_seeds = num_seeds
+        self.seeds = nn.Parameter(torch.randn(1, num_seeds, embed_dim) * embed_dim ** -0.5)
+        self.q_proj = nn.Linear(embed_dim, embed_dim)
+        self.k_proj = nn.Linear(embed_dim, embed_dim)
+        self.v_proj = nn.Linear(embed_dim, embed_dim)
+        self.out_proj = nn.Linear(embed_dim, embed_dim)
+
+    def forward(self, h: torch.Tensor, keep: torch.Tensor) -> torch.Tensor:
+        B, N, E = h.shape
+        S = self.num_seeds
+        q = self.q_proj(self.seeds.expand(B, -1, -1)).view(B, S, self.num_heads, self.head_dim).transpose(1, 2)
+        k = self.k_proj(h).view(B, N, self.num_heads, self.head_dim).transpose(1, 2)
+        v = self.v_proj(h).view(B, N, self.num_heads, self.head_dim).transpose(1, 2)
+
+        scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)   # B,H,S,N
+        scores = scores.masked_fill(~keep.view(B, 1, 1, N), _MASK_FILL)
+        attn = torch.softmax(scores, dim=-1)
+        out = torch.matmul(attn, v).transpose(1, 2).contiguous().view(B, S, E)
+        return self.out_proj(out).reshape(B, S * E)
+
+
+class PMAEncoder(nn.Module):
+    """Per-particle MLP, optional masked self-attention blocks, then PMA readout.
+
+    num_layers=0 is Deep Sets with an attention-weighted readout; num_layers>0 is
+    the transformer with the CLS token replaced by k learned seed queries, so no
+    single token carries the whole summary.
+    """
+
+    def __init__(
+            self,
+            num_features: int,
+            embed_size: int,
+            latent_dim: int,
+            num_heads: int = 8,
+            num_layers: int = 4,
+            linear_dim: Union[int, None] = None,
+            num_tokens: Union[int, None] = None,
+            pairwise: bool = False,
+            num_seeds: int = 4,
+        ):
+        super().__init__()
+        self.pairwise = pairwise
+        self.phi = _phi_mlp(num_features, embed_size)
+        self.layers = nn.ModuleList([
+            TransformerEncoderBlock(
+                embed_size,
+                num_heads,
+                linear_dim=linear_dim,
+                num_tokens=num_tokens if num_tokens is not None else None,
+                pairwise=False,
+            ) for _ in range(num_layers)
+        ])
+        self.pma = PMAPooling(embed_size, num_heads, num_seeds=num_seeds)
+        self.norm_pooled = nn.LayerNorm(num_seeds * embed_size)
+        self.bottleneck = nn.Linear(num_seeds * embed_size, latent_dim)
+
+    def forward(self, x: torch.Tensor, pairwise_feats: Union[None, torch.Tensor] = None, mask: Union[None, torch.Tensor] = None):
+        keep = _survivors(x, mask)
+        h = self.phi(x) * keep.unsqueeze(-1).to(x.dtype)
+        for layer in self.layers:
+            h = layer(h, None, src_key_padding_mask=~keep)
+            h = h * keep.unsqueeze(-1).to(h.dtype)
+        pooled = self.pma(h, keep)
+        return self.bottleneck(self.norm_pooled(pooled))

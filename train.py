@@ -5,6 +5,7 @@ import os
 import logging
 import argparse
 import importlib
+import embedding.models as models
 from embedding.models import TransformerEncoder, Projector
 from embedding.loss import InfoNCELoss
 from embedding.training import make_train_val_split, build_train_val_loaders, train_epoch, validate_epoch, EarlyStopping, cosine_schedule_with_warmup, cosine_constrastive_schedule
@@ -49,6 +50,8 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
     latent_dim = cfg.hp("latent_dim", 6)
     proj_dim = cfg.hp("proj_dim", 12)
     linear_dim = cfg.hp("linear_dim", None)
+    encoder_class = cfg.hp("encoder_class", "TransformerEncoder")  # WP-D: pick the set encoder by name
+    use_degradation = cfg.hp("use_degradation", True)              # WP-D: off for clean-baseline runs
     contrast_temp = cfg.hp("contrast_temp", 0.07)
     contrastive_weight = cfg.hp("contrastive_weight", 0.05) # Min
     contrastive_max = cfg.hp("contrastive_max", None) # Max for schedule, None for fixed
@@ -100,12 +103,13 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
         X_tr, y_tr, X_val, y_val, device=device, batch_size=batch_size, pfcands=pfcands
     )
 
-    degradation = Degradation(severity=None).to(device).train()
+    degradation = Degradation(severity=None).to(device).train() if use_degradation else None
 
     preproc_class = getattr(importlib.import_module("embedding.preprocs"), preproc_type)
 
     preproc = preproc_class(norm_constants).to(device).train()
-    encoder = TransformerEncoder(
+    logger.info(f"Encoder class: {encoder_class} | training degradation: {use_degradation}")
+    encoder = getattr(models, encoder_class)(
         num_features=preproc.num_features,
         embed_size=embed_size, 
         latent_dim=latent_dim, 
