@@ -49,6 +49,7 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
     latent_dim = cfg.hp("latent_dim", 6)
     proj_dim = cfg.hp("proj_dim", 12)
     linear_dim = cfg.hp("linear_dim", None)
+    readout = cfg.hp("readout", "cls")  # WP-A: TransformerEncoder readout variant
     contrast_temp = cfg.hp("contrast_temp", 0.07)
     contrastive_weight = cfg.hp("contrastive_weight", 0.05) # Min
     contrastive_max = cfg.hp("contrastive_max", None) # Max for schedule, None for fixed
@@ -114,6 +115,7 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
         linear_dim=linear_dim, 
         num_tokens=num_pf_objects if linear_dim is not None else None,
         pairwise=pairwise,
+        readout=readout,
     ).to(device).train()
     projector = Projector(latent_dim, proj_dim, hidden_dim=(proj_dim*4)).to(device).train()
     classifier = nn.Linear(proj_dim, num_classes).to(device).train()

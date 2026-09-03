@@ -293,6 +293,22 @@ class TransformerEncoder(nn.Module):
             parts.append(torch.where(n_alive > 0, mx, torch.zeros_like(mx)))
         return torch.cat(parts, dim=-1)
     
+# Thin aliases so a readout variant can be benchmarked with the shared ruler unchanged:
+# bench_eval.py builds the encoder without a `readout` kwarg, but it does take --encoder_class.
+# These also give us a drop-in default if the planner rules a variant into the final branch,
+# since eval.py never passes readout either.
+class TransformerEncoderClsMean(TransformerEncoder):
+    def __init__(self, *args, readout: str = "cls+mean", **kwargs):
+        super().__init__(*args, readout=readout, **kwargs)
+
+class TransformerEncoderClsMeanMax(TransformerEncoder):
+    def __init__(self, *args, readout: str = "cls+mean+max", **kwargs):
+        super().__init__(*args, readout=readout, **kwargs)
+
+class TransformerEncoderPMA(TransformerEncoder):
+    def __init__(self, *args, readout: str = "pma", **kwargs):
+        super().__init__(*args, readout=readout, **kwargs)
+
 class Projector(nn.Module):
     def __init__(self, input_dim, proj_dim, hidden_dim):
         super().__init__()
