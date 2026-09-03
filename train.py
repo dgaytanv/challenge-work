@@ -6,7 +6,7 @@ import logging
 import argparse
 import importlib
 from embedding.models import TransformerEncoder, Projector
-from embedding.loss import InfoNCELoss
+from embedding.loss import InfoNCELoss, NTXentInstanceLoss
 from embedding.training import make_train_val_split, build_train_val_loaders, train_epoch, validate_epoch, EarlyStopping, cosine_schedule_with_warmup, cosine_constrastive_schedule
 from embedding.utils.data_utils import compute_normalization_constants
 from embedding.utils.cfg_handler import train_config, data_config
@@ -57,6 +57,21 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
     lr_min = cfg.hp("lr_min", 0.0)
     lr_warmup = cfg.hp("lr_warmup", 0.05)
     batch_size = cfg.hp("batch_size", 256)
+
+    # WP-C two-view consistency training. two_view=False reproduces stock behaviour exactly.
+    two_view = cfg.hp("two_view", False)
+    consistency_weight = cfg.hp("consistency_weight", 1.0)
+    consistency_mse_weight = cfg.hp("consistency_mse_weight", 0.1)
+    instance_weight = cfg.hp("instance_weight", 0.0)
+    seed = cfg.hp("seed", None)
+    if seed is not None:
+        torch.manual_seed(int(seed))
+        torch.cuda.manual_seed_all(int(seed))
+        logger.info(f"Seeded RNG with {seed}")
+    logger.info(
+        f"two_view={two_view} consistency_weight={consistency_weight} "
+        f"consistency_mse_weight={consistency_mse_weight} instance_weight={instance_weight}"
+    )
 
     logger.info("Scaler for mixed precision training: {}".format(mixed_prec))
     scaler = torch.cuda.amp.GradScaler(enabled=((device=="cuda") and mixed_prec))
@@ -122,6 +137,7 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
     ce_loss_fn = nn.CrossEntropyLoss(weight=class_weights)
 
     criterion = InfoNCELoss(temperature=contrast_temp)
+    instance_criterion = NTXentInstanceLoss(temperature=contrast_temp)
 
     optimizer = torch.optim.Adam(
         list(preproc.parameters()) +
@@ -176,7 +192,12 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
             contrastive_weight=contrastive_weight if contrastive_max is None else contrastive_schedule,
             pairwise=pairwise, 
             num_classes=num_classes,
-            scaler=scaler
+            scaler=scaler,
+            two_view=two_view,
+            consistency_weight=consistency_weight,
+            consistency_mse_weight=consistency_mse_weight,
+            instance_weight=instance_weight,
+            instance_loss=instance_criterion,
         )
         va = validate_epoch(
             encoder, 
@@ -191,7 +212,12 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
             degradation=degradation,
             contrastive_weight=contrastive_weight if contrastive_max is None else contrastive_schedule,
             pairwise=pairwise, 
-            num_classes=num_classes
+            num_classes=num_classes,
+            two_view=two_view,
+            consistency_weight=consistency_weight,
+            consistency_mse_weight=consistency_mse_weight,
+            instance_weight=instance_weight,
+            instance_loss=instance_criterion,
         )
 
         log_str = (
@@ -199,6 +225,12 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
             f"Train: Loss {tr['loss']:.6f}, Contrast {tr['contrast']:.6f}, CrossEntropy {tr['ce']:.6f}, Acc {tr['acc']:.4f}, AUC {tr['auc']:.4f} | "
             f"Val: Loss {va['loss']:.6f}, Contrast {va['contrast']:.6f}, CrossEntropy {va['ce']:.6f}, Acc {va['acc']:.4f}, AUC {va['auc']:.4f}"
         )
+        if two_view:
+            log_str += (
+                f" | TwoView: cons {tr['cons']:.6f}, mse {tr['cons_mse']:.6f}, inst {tr['inst']:.6f}, "
+                f"cos_tr {tr['cos']:.4f}, acc_deg_tr {tr['acc_deg']:.4f} | "
+                f"cos_val {va['cos']:.4f}, acc_deg_val {va['acc_deg']:.4f}"
+            )
         logger.info(log_str)
 
         # save best on validation loss 

@@ -30,3 +30,12 @@ hyperparameters:
   contrastive_weight: 0.05
   contrastive_max: null
   contrastive_warmup: 0.05
+
+  # WP-C: two-view consistency training.
+  # two_view=false reproduces stock single-view behaviour exactly (acceptance test).
+  # Consistency acts on the LATENT (pre-projector) - that is what the grader's probe sees.
+  two_view: true
+  consistency_weight: 1.0        # weight on mean(1 - cos(z_degraded, z_clean.detach()))
+  consistency_mse_weight: 0.1    # weight on mse(z_degraded, z_clean.detach())
+  instance_weight: 0.0           # SimCLR NT-Xent, positives = the other view only
+  seed: null                     # set an int for reproducible runs (acceptance test)

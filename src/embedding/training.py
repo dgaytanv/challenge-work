@@ -68,6 +68,24 @@ def build_train_val_loaders(
     val_loader   = DataLoader(ds_val, batch_size=batch_size, shuffle=False, num_workers=0)
     return train_loader, val_loader
 
+def _cls_mask(mask):
+    """Prepend the always-attendable CLS slot to a [B, N] padding mask -> [B, N+1]."""
+    return torch.cat([
+        torch.zeros(mask.size(0), 1, device=mask.device, dtype=torch.bool),
+        mask.bool()
+    ], dim=1)
+
+def consistency_terms(z_d, z_c):
+    """Pull the degraded latent toward the clean latent (stop-grad on clean).
+
+    The eval probe is fit on CLEAN latents and then applied to degraded ones, so this
+    per-event invariance on the LATENT (pre-projector) is exactly what has to transfer.
+    Returns (cosine_loss, mse_loss, mean_cosine_similarity).
+    """
+    z_c = z_c.detach()
+    cos = F.cosine_similarity(z_d, z_c, dim=-1)
+    return (1.0 - cos).mean(), F.mse_loss(z_d, z_c), cos.mean()
+
 def train_epoch(
     encoder, projector, classifier,
     ce_loss_fn, contrastive_loss,
@@ -76,28 +94,37 @@ def train_epoch(
     degradation=None,
     scheduler=None, contrastive_weight=0.05,
     pairwise=False, num_classes=4,
-    scaler=None
+    scaler=None,
+    two_view=False, consistency_weight=1.0, consistency_mse_weight=0.1,
+    instance_weight=0.0, instance_loss=None,
 ):
     if degradation is not None:
         degradation.train()
     encoder.train(); projector.train(); classifier.train(); preproc.train()
 
     total_loss = total_contrast = total_ce = 0.0
+    total_cons = total_cons_mse = total_inst = total_cos = 0.0
     count = 0
     scheduled_contrst_wght = not (isinstance(contrastive_weight, int) or isinstance(contrastive_weight, float))
     class_metrics = ClassificationMetrics(num_classes)
+    deg_metrics = ClassificationMetrics(num_classes) if two_view else None
 
     for x, mask, labels in train_loader:
         x = x.to(device)
-        if degradation is not None:
+        if not two_view and degradation is not None:
             x = degradation(x)
         mask = mask.to(device)
         labels = labels.to(device)
 
-        mask = torch.cat([
-            torch.zeros(mask.size(0), 1, device=mask.device, dtype=torch.bool),
-            mask.bool()
-        ], dim=1)
+        if two_view:
+            # Two views of the SAME events, concatenated on the batch dim so preproc's
+            # BatchNorm and the encoder see both together in one forward.
+            x_d = degradation(x) if degradation is not None else x
+            x = torch.cat([x, x_d], dim=0)
+            mask = torch.cat([mask, mask], dim=0)
+            labels = torch.cat([labels, labels], dim=0)
+
+        mask = _cls_mask(mask)
 
         delta_r = delta_r_from_normalized(x, norm_constants) if pairwise else None
 
@@ -113,6 +140,17 @@ def train_epoch(
 
             contrast_weight_value = contrastive_weight.get() if scheduled_contrst_wght else contrastive_weight
             loss = contrast_weight_value * loss_constrast + loss_ce
+
+            if two_view:
+                B = latent.size(0) // 2
+                z_c, z_d = latent[:B], latent[B:]
+                loss_cons, loss_cons_mse, cos_mean = consistency_terms(z_d, z_c)
+                loss = loss + consistency_weight * loss_cons + consistency_mse_weight * loss_cons_mse
+                if instance_weight > 0.0 and instance_loss is not None:
+                    loss_inst = instance_loss(embeddings[:B], embeddings[B:])
+                    loss = loss + instance_weight * loss_inst
+                else:
+                    loss_inst = torch.zeros((), device=latent.device)
 
         if use_amp:
             scaler.scale(loss).backward()
@@ -136,13 +174,28 @@ def train_epoch(
         total_ce       += loss_ce.item() * bs
         count          += bs
         class_metrics.update(logits, labels)
+        if two_view:
+            total_cons     += loss_cons.item() * bs
+            total_cons_mse += loss_cons_mse.item() * bs
+            total_inst     += loss_inst.item() * bs
+            total_cos      += cos_mean.item() * bs
+            deg_metrics.update(logits[B:], labels[B:])
 
-    return {
+    out = {
         "loss":     total_loss    / count,
         "contrast": total_contrast / count,
         "ce":       total_ce      / count,
         **class_metrics.compute_metrics()
     }
+    if two_view:
+        out.update({
+            "cons":     total_cons     / count,
+            "cons_mse": total_cons_mse / count,
+            "inst":     total_inst     / count,
+            "cos":      total_cos      / count,
+            "acc_deg":  deg_metrics.compute_metrics()["acc"],
+        })
+    return out
 
 @torch.no_grad()
 def validate_epoch(
@@ -151,28 +204,35 @@ def validate_epoch(
     val_loader, norm_constants, device, preproc,
     degradation=None,
     contrastive_weight=0.05,
-    pairwise=False, num_classes=4
+    pairwise=False, num_classes=4,
+    two_view=False, consistency_weight=1.0, consistency_mse_weight=0.1,
+    instance_weight=0.0, instance_loss=None,
 ):
     if degradation is not None:
         degradation.eval()
     encoder.eval(); projector.eval(); classifier.eval(); preproc.eval()
 
     total_loss = total_contrast = total_ce = 0.0
+    total_cons = total_cons_mse = total_inst = total_cos = 0.0
     count = 0
     scheduled_contrst_wght = not (isinstance(contrastive_weight, int) or isinstance(contrastive_weight, float))
     class_metrics = ClassificationMetrics(num_classes)
+    deg_metrics = ClassificationMetrics(num_classes) if two_view else None
 
     for x, mask, labels in val_loader:
         x = x.to(device)
-        if degradation is not None:
+        if not two_view and degradation is not None:
             x = degradation(x)
         mask = mask.to(device)
         labels = labels.to(device)
 
-        mask = torch.cat([
-            torch.zeros(mask.size(0), 1, device=mask.device, dtype=torch.bool),
-            mask.bool()
-        ], dim=1)
+        if two_view:
+            x_d = degradation(x) if degradation is not None else x
+            x = torch.cat([x, x_d], dim=0)
+            mask = torch.cat([mask, mask], dim=0)
+            labels = torch.cat([labels, labels], dim=0)
+
+        mask = _cls_mask(mask)
 
         delta_r = delta_r_from_normalized(x, norm_constants) if pairwise else None
 
@@ -185,19 +245,45 @@ def validate_epoch(
         contrast_weight_value = contrastive_weight.get() if scheduled_contrst_wght else contrastive_weight
         loss = contrast_weight_value * loss_constrast + loss_ce
 
+        if two_view:
+            B = latent.size(0) // 2
+            z_c, z_d = latent[:B], latent[B:]
+            loss_cons, loss_cons_mse, cos_mean = consistency_terms(z_d, z_c)
+            loss = loss + consistency_weight * loss_cons + consistency_mse_weight * loss_cons_mse
+            if instance_weight > 0.0 and instance_loss is not None:
+                loss_inst = instance_loss(embeddings[:B], embeddings[B:])
+                loss = loss + instance_weight * loss_inst
+            else:
+                loss_inst = torch.zeros((), device=latent.device)
+
         bs = x.size(0)
         total_loss     += loss.item() * bs
         total_contrast += loss_constrast.item() * bs
         total_ce       += loss_ce.item() * bs
         count          += bs
         class_metrics.update(logits, labels)
+        if two_view:
+            total_cons     += loss_cons.item() * bs
+            total_cons_mse += loss_cons_mse.item() * bs
+            total_inst     += loss_inst.item() * bs
+            total_cos      += cos_mean.item() * bs
+            deg_metrics.update(logits[B:], labels[B:])
 
-    return {
+    out = {
         "loss":     total_loss     / count,
         "contrast": total_contrast / count,
         "ce":       total_ce       / count,
         **class_metrics.compute_metrics()
     }
+    if two_view:
+        out.update({
+            "cons":     total_cons     / count,
+            "cons_mse": total_cons_mse / count,
+            "inst":     total_inst     / count,
+            "cos":      total_cos      / count,
+            "acc_deg":  deg_metrics.compute_metrics()["acc"],
+        })
+    return out
 
 def cosine_schedule_with_warmup(
         optimizer: torch.optim.Optimizer, 
