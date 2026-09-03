@@ -7,7 +7,7 @@ import argparse
 import importlib
 import embedding.models as models
 from embedding.models import TransformerEncoder, Projector
-from embedding.loss import InfoNCELoss, NTXentInstanceLoss
+from embedding.loss import InfoNCELoss, NTXentInstanceLoss, JSDLogitConsistency
 from embedding.training import make_train_val_split, build_train_val_loaders, train_epoch, validate_epoch, EarlyStopping, cosine_schedule_with_warmup, cosine_constrastive_schedule
 from embedding.utils.data_utils import compute_normalization_constants
 from embedding.utils.cfg_handler import train_config, data_config
@@ -69,6 +69,7 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
     instance_weight = cfg.hp("instance_weight", 0.0)
     normalize_mse = cfg.hp("consistency_mse_normalized", True)
     center_cos = cfg.hp("consistency_cos_centered", True)
+    logit_consistency_weight = cfg.hp("logit_consistency_weight", 0.0)
     seed = cfg.hp("seed", None)
     if seed is not None:
         torch.manual_seed(int(seed))
@@ -77,7 +78,7 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
     logger.info(
         f"two_view={two_view} consistency_weight={consistency_weight} "
         f"consistency_mse_weight={consistency_mse_weight} instance_weight={instance_weight} "
-        f"consistency_mse_normalized={normalize_mse} consistency_cos_centered={center_cos}"
+        f"consistency_mse_normalized={normalize_mse} consistency_cos_centered={center_cos} logit_consistency_weight={logit_consistency_weight}"
     )
 
     logger.info("Scaler for mixed precision training: {}".format(mixed_prec))
@@ -159,6 +160,7 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
 
     criterion = InfoNCELoss(temperature=contrast_temp)
     instance_criterion = NTXentInstanceLoss(temperature=contrast_temp)
+    jsd_criterion = JSDLogitConsistency()
 
     optimizer = torch.optim.Adam(
         list(preproc.parameters()) +
@@ -197,8 +199,16 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
     # Two extra selections alongside the best-val-loss file, which keeps its name and format.
     # Rationale: total val loss mixes CE, contrast and the consistency terms, so the file it
     # picks is "best composite loss", not best AUC and not best robustness.
-    bestauc_path = model_path.replace(".pth", "_bestauc.pth")
-    last_path = model_path.replace(".pth", "_last.pth")
+    # Auxiliary selections live in a SUBDIRECTORY, never beside the primary file: any
+    # glob over the checkpoint dir would otherwise pick them up. D's bench used
+    # `ls -t ... | head -1` and the organisers' notebook uses
+    # sorted(glob("checkpoints/*.pth"))[-1], where "_last.pth" sorts after ".pth" --
+    # both would silently evaluate the last epoch instead of best-val-loss.
+    aux_dir = os.path.join(outdir, "aux")
+    os.makedirs(aux_dir, exist_ok=True)
+    aux_base = os.path.basename(model_path)
+    bestauc_path = os.path.join(aux_dir, aux_base.replace(".pth", "_bestauc.pth"))
+    last_path = os.path.join(aux_dir, aux_base.replace(".pth", "_last.pth"))
     best_val_auc = float("-inf")
 
     logger.info(f"Starting training for {num_epochs} epochs.")
@@ -228,6 +238,8 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
             instance_loss=instance_criterion,
             normalize_mse=normalize_mse,
             center_cos=center_cos,
+            logit_consistency_weight=logit_consistency_weight,
+            logit_consistency_loss=jsd_criterion,
         )
         va = validate_epoch(
             encoder, 
@@ -251,6 +263,8 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
             instance_loss=instance_criterion,
             normalize_mse=normalize_mse,
             center_cos=center_cos,
+            logit_consistency_weight=logit_consistency_weight,
+            logit_consistency_loss=jsd_criterion,
         )
 
         log_str = (
@@ -265,7 +279,10 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
                 f"cos_val {va['cos']:.4f}, acc_deg_val {va['acc_deg']:.4f} | "
                 f"cos_shuf_tr {tr['cos_shuf']:.4f}, cos_shuf_val {va['cos_shuf']:.4f} | "
                 f"pop_drift_tr {tr['pop_drift']:.4f}, pop_drift_val {va['pop_drift']:.4f}, "
-                f"drift_spread_tr {tr['drift_spread']:.4f}, drift_spread_val {va['drift_spread']:.4f}"
+                f"drift_spread_tr {tr['drift_spread']:.4f}, drift_spread_val {va['drift_spread']:.4f} | "
+                f"jsd_tr {tr['jsd']:.6f}, jsd_val {va['jsd']:.6f} | "
+                f"spread_tr {tr['lat_spread']:.3f}, offset_tr {tr['lat_offset']:.3f}, "
+                f"spread_val {va['lat_spread']:.3f}, offset_val {va['lat_offset']:.3f}"
             )
         logger.info(log_str)
 

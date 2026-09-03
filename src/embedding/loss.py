@@ -169,3 +169,30 @@ class NTXentInstanceLoss(nn.Module):
             torch.arange(0, B, device=device),
         ])
         return F.cross_entropy(sim, targets)
+
+
+class JSDLogitConsistency(nn.Module):
+    """Jensen-Shannon divergence between the classifier's predictive distribution on the
+    clean view (detached) and on the degraded view.
+
+    Why this and not more latent MSE: WP-D measured that only ~11% of the squared latent
+    displacement lies along directions the eval probe actually reads, yet that component
+    alone reproduces the entire AUC loss under degradation. An isotropic MSE therefore
+    spends ~89% of its gradient budget on motion that costs ~2.5% of the damage. The
+    four-class classifier's directions are a label-legal proxy for the probe's, so a
+    divergence on its output penalises displacement where it is measured.
+
+    JSD is used rather than KL because it is symmetric and bounded, so a confidently wrong
+    degraded view cannot dominate the batch the way a reverse-KL blow-up would.
+    """
+    def __init__(self, eps: float = 1e-8):
+        super().__init__()
+        self.eps = eps
+
+    def forward(self, logits_clean: torch.Tensor, logits_degraded: torch.Tensor) -> torch.Tensor:
+        p = F.softmax(logits_clean.detach().float(), dim=-1)
+        q = F.softmax(logits_degraded.float(), dim=-1)
+        m = (0.5 * (p + q)).clamp_min(self.eps)
+        kl_pm = (p * (p.clamp_min(self.eps).log() - m.log())).sum(-1)
+        kl_qm = (q * (q.clamp_min(self.eps).log() - m.log())).sum(-1)
+        return (0.5 * (kl_pm + kl_qm)).mean()
