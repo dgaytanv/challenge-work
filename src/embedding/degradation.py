@@ -86,7 +86,7 @@ class Degradation(nn.Module):
         reflect_eta: bool = True,
         p_clean: float = 0.15,
         s_max: float = 0.85,
-        warmup_calls: int = 2000,
+        warmup_calls: int = 600,
         curriculum: bool = True,
         p_charged_only: float = 0.05,
         p_neutral_only: float = 0.05,
