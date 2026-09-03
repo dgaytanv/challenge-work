@@ -117,11 +117,13 @@ class TransformerEncoderBlock(nn.Module):
             dropout: float = 0.1, 
             linear_dim: Union[int, None] = None, 
             num_tokens: Union[int, None] = None,
-            pairwise: bool = False
+            pairwise: bool = False,
+            prenorm: bool = False
         ):
         super().__init__()
         if linear_dim is not None and num_tokens is None:
             raise ValueError("num_tokens must be provided if linear_dim is specified")
+        self.prenorm = prenorm
         self.self_attn = AttentionLayer(embed_dim, num_heads, pairwise) if linear_dim is None else LinearAttentionLayer(embed_dim, num_heads, linear_dim, num_tokens, pairwise)
         self.linear1 = nn.Linear(embed_dim, dim_feedforward)
         self.dropout = nn.Dropout(dropout)
@@ -140,6 +142,15 @@ class TransformerEncoderBlock(nn.Module):
             pairwise_feats: Union[None, torch.Tensor] = None, 
             src_key_padding_mask: Union[None, torch.Tensor] = None
         ):
+        if self.prenorm:
+            # LayerNorm inside the residual branch: the skip path stays unnormalised, so a
+            # change in the token set perturbs the output less than post-norm, which re-centres
+            # every layer's output on whatever tokens survived.
+            src2 = self.self_attn(self.norm1(src), pairwise_feats, key_padding_mask=src_key_padding_mask)
+            src = src + self.dropout1(src2)
+            src2 = self.linear2(self.dropout(self.activation(self.linear1(self.norm2(src)))))
+            src = src + self.dropout2(src2)
+            return src
         src2 = self.self_attn(src, pairwise_feats, key_padding_mask=src_key_padding_mask)
         src = src + self.dropout1(src2)
         src = self.norm1(src)
@@ -212,12 +223,18 @@ class TransformerEncoder(nn.Module):
             num_tokens: Union[int, None] = None,
             pairwise: bool = False,
             readout: str = "cls",
+            prenorm: bool = False,
+            dead_frac_token: bool = False,
         ):
         super().__init__()
         if readout not in self.READOUTS:
             raise ValueError(f"unknown readout {readout!r}, expected one of {sorted(self.READOUTS)}")
         self.readout = readout
+        self.dead_frac_token = dead_frac_token
         self.input_proj = nn.Linear(num_features, embed_size)
+        # Tells the CLS token how much of the event is missing, so it can compensate rather than
+        # read a partial event as a genuinely sparse one.
+        self.dead_frac_proj = nn.Linear(1, embed_size) if dead_frac_token else None
         self.layers = nn.ModuleList(
             [
                 TransformerEncoderBlock(
@@ -225,10 +242,14 @@ class TransformerEncoder(nn.Module):
                     num_heads, 
                     linear_dim=linear_dim, 
                     num_tokens=num_tokens+1 if num_tokens is not None else None,
-                    pairwise=pairwise
+                    pairwise=pairwise,
+                    prenorm=prenorm
                 ) for _ in range(num_layers)
             ]
         )
+        self.prenorm = prenorm
+        # A pre-norm stack leaves the residual stream unnormalised after the last block.
+        self.norm_final = nn.LayerNorm(embed_size) if prenorm else None
         self.pma = PMAPooling(embed_size, num_heads, self.PMA_SEEDS) if readout == "pma" else None
         readout_dim = self.READOUTS[readout] * embed_size
         self.norm_cls_embedding = nn.LayerNorm(readout_dim)
@@ -249,6 +270,9 @@ class TransformerEncoder(nn.Module):
         x = self.input_proj(x) # [B, N, E]
 
         cls_tokens = self.cls_token.expand(B, -1, -1)
+        if self.dead_frac_proj is not None:
+            dead_frac = mask[:, 1:].to(x.dtype).mean(dim=1, keepdim=True).unsqueeze(-1)  # [B,1,1]
+            cls_tokens = cls_tokens + self.dead_frac_proj(dead_frac)
         x = torch.cat([cls_tokens, x], dim=1) 
         device = x.device
 
@@ -268,6 +292,8 @@ class TransformerEncoder(nn.Module):
         for layer in self.layers:
             x = layer(x, pairwise_bias, src_key_padding_mask=mask)
 
+        if self.norm_final is not None:
+            x = self.norm_final(x)
         pooled = self._pool(x, mask)
         latent = self.bottleneck(self.norm_cls_embedding(pooled))
         return latent

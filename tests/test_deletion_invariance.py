@@ -35,14 +35,15 @@ def pack_survivors(x, keep):
     return out
 
 
-def run(readout, x, dtype, device):
+def run(readout, x, dtype, device, label=None, **kw):
     torch.manual_seed(0)
     preproc = PFPreProcessor({}).to(device=device, dtype=dtype).eval()
     encoder = TransformerEncoder(
         num_features=preproc.num_features, embed_size=128, latent_dim=6,
         num_heads=8, num_layers=4, linear_dim=None, num_tokens=None,
-        pairwise=False, readout=readout,
+        pairwise=False, readout=readout, **kw,
     ).to(device=device, dtype=dtype).eval()
+    readout = label or readout
     if readout == "cls" and os.path.isfile(CKPT):
         ck = torch.load(CKPT, map_location=device)
         preproc.load_state_dict(ck["preproc"]); encoder.load_state_dict(ck["encoder"])
@@ -87,15 +88,29 @@ def main():
             d = run(readout, feats.to(dtype), dtype, device)
             if dtype is torch.float64 and d > TOL:
                 failures.append((readout, d))
+    # A4: pre-norm blocks must not cost invariance (they only move the LayerNorms).
+    d = run("cls", feats.to(torch.float64), torch.float64, device, label="cls prenorm", prenorm=True)
+    if d > TOL:
+        failures.append(("cls prenorm", d))
+
+    # A4: dead_frac_token is DELIBERATELY not invariant -- it feeds the encoder the fraction of
+    # rows that are dead, which is 0.5 for the zeroed batch and 0.0 once they are deleted. That
+    # is the whole point of the feature (compensate for a partial event rather than read it as a
+    # genuinely sparse one), so it is reported, not asserted.
+    d = run("cls", feats.to(torch.float64), torch.float64, device,
+            label="cls dead_frac", dead_frac_token=True)
+    print(f"    ^ expected to differ: dead_frac_token feeds dead fraction 0.5 vs 0.0 by design")
 
     # all-dead event must still produce a finite latent
-    for readout in ("cls", "cls+mean", "cls+mean+max", "pma"):
+    for readout, kw in [("cls", {}), ("cls+mean", {}), ("cls+mean+max", {}), ("pma", {}),
+                        ("cls", {"prenorm": True}), ("cls", {"dead_frac_token": True})]:
         torch.manual_seed(0)
         preproc = PFPreProcessor({}).to(device).eval()
         enc = TransformerEncoder(
             num_features=preproc.num_features, embed_size=128, latent_dim=6, num_heads=8,
-            num_layers=4, linear_dim=None, num_tokens=None, pairwise=False, readout=readout,
+            num_layers=4, linear_dim=None, num_tokens=None, pairwise=False, readout=readout, **kw,
         ).to(device).eval()
+        readout = readout + ("".join(f" {k}" for k in kw))
         dead_batch = torch.zeros(4, 200, 7, device=device)
         with torch.no_grad():
             z = enc(preproc(dead_batch), None, None)
