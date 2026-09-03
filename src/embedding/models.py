@@ -364,13 +364,32 @@ def _survivors(x: torch.Tensor, mask: Union[None, torch.Tensor]) -> torch.Tensor
     return keep
 
 
-def _masked_mean_max(h: torch.Tensor, keep: torch.Tensor):
-    """Masked mean and max over the token axis. Divides by the surviving count."""
+def _masked_pool(h: torch.Tensor, keep: torch.Tensor, mode: str = "mean+max"):
+    """Masked pooling over the token axis. Always divides by the surviving count.
+
+    ``mean`` is smooth under deletion: dropping a candidate removes its term and
+    rescales by the new count. ``max`` is not - if the arg-max candidate falls inside
+    the dead region the pooled value jumps to the runner-up, which is exactly the
+    discontinuity the metric punishes. ``lse`` (log-sum-exp, count-normalised) is the
+    smooth stand-in for max. Default stays ``mean+max``: that is what d-deepsets-clean
+    measured, so it remains the benchmarked reference until an arm says otherwise.
+    """
     k = keep.unsqueeze(-1).to(h.dtype)
     count = k.sum(dim=1).clamp(min=1.0)                       # [B, 1]
     mean = (h * k).sum(dim=1) / count
-    mx = h.masked_fill(~keep.unsqueeze(-1), _MASK_FILL).max(dim=1).values
-    return mean, mx, count
+    if mode == "mean":
+        return mean, count
+    if mode == "mean+max":
+        mx = h.masked_fill(~keep.unsqueeze(-1), _MASK_FILL).max(dim=1).values
+        return torch.cat([mean, mx], dim=-1), count
+    if mode == "mean+lse":
+        z = h.masked_fill(~keep.unsqueeze(-1), _MASK_FILL)
+        lse = torch.logsumexp(z.float(), dim=1) - torch.log(count.float())
+        return torch.cat([mean, lse.to(h.dtype)], dim=-1), count
+    raise ValueError(f"unknown pooling mode: {mode!r}")
+
+
+_POOL_WIDTH = {"mean": 1, "mean+max": 2, "mean+lse": 2}
 
 
 def _phi_mlp(num_features: int, embed_size: int) -> nn.Module:
@@ -403,12 +422,14 @@ class DeepSetsEncoder(nn.Module):
             num_tokens: Union[int, None] = None,
             pairwise: bool = False,
             count_feature: bool = False,
+            pooling: str = "mean+max",
         ):
         super().__init__()
         self.pairwise = pairwise
         self.count_feature = count_feature
+        self.pooling = pooling
         self.phi = _phi_mlp(num_features, embed_size)
-        pooled_dim = 2 * embed_size + (1 if count_feature else 0)
+        pooled_dim = _POOL_WIDTH[pooling] * embed_size + (1 if count_feature else 0)
         self.norm_pooled = nn.LayerNorm(pooled_dim)
         self.rho = nn.Sequential(
             nn.Linear(pooled_dim, embed_size),
@@ -419,8 +440,7 @@ class DeepSetsEncoder(nn.Module):
     def forward(self, x: torch.Tensor, pairwise_feats: Union[None, torch.Tensor] = None, mask: Union[None, torch.Tensor] = None):
         keep = _survivors(x, mask)
         h = self.phi(x) * keep.unsqueeze(-1).to(x.dtype)
-        mean, mx, count = _masked_mean_max(h, keep)
-        pooled = torch.cat([mean, mx], dim=-1)
+        pooled, count = _masked_pool(h, keep, self.pooling)
         if self.count_feature:
             pooled = torch.cat([pooled, torch.log(count)], dim=-1)
         return self.rho(self.norm_pooled(pooled))

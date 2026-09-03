@@ -35,6 +35,8 @@ def test_deletion_equivalence():
     for name, model in [
         ("DeepSets", build(DeepSetsEncoder, 0)),
         ("DeepSets+count", build(DeepSetsEncoder, 0, count_feature=True)),
+        ("DeepSets pool=mean", build(DeepSetsEncoder, 0, pooling="mean")),
+        ("DeepSets pool=lse", build(DeepSetsEncoder, 0, pooling="mean+lse")),
         ("PMA(L=0)", build(PMAEncoder, 0)),
         ("PMA(L=2)", build(PMAEncoder, 2)),
     ]:
@@ -109,10 +111,36 @@ def test_step_time():
         print(f"  {name:20s} {(time.time() - t0) / 10 * 1000:7.1f} ms/step   {nparam/1e6:.2f}M params")
 
 
+
+def test_pooling_smoothness():
+    """How far the latent moves when ONE surviving candidate is deleted.
+
+    max pooling is discontinuous: if the arg-max candidate is the one removed, the
+    pooled value drops to the runner-up. mean and log-sum-exp have no such jump. This
+    measures the worst single-candidate deletion over a batch, which is the local
+    version of what the AUC-vs-severity curve integrates.
+    """
+    B, N = 32, 100
+    x = torch.randn(B, N, NF, device=DEV)
+    mask = torch.zeros(B, N + 1, dtype=torch.bool, device=DEV)
+    for mode in ["mean", "mean+max", "mean+lse"]:
+        model = build(DeepSetsEncoder, 0, pooling=mode)
+        with torch.no_grad():
+            z0 = model(x, None, mask)
+            scale = z0.std(dim=0).mean()
+            worst = 0.0
+            for j in range(N):
+                xj = x.clone()
+                xj[:, j] = 0.0
+                dz = (model(xj, None, mask) - z0).norm(dim=-1).max().item()
+                worst = max(worst, dz)
+        print(f"  pooling={mode:9s} worst single-deletion |dz| = {worst:.4f}"
+              f"  ({worst / scale.item():.3f} x latent std)")
+
 if __name__ == "__main__":
     print(f"device = {DEV}")
     for fn in [test_deletion_equivalence, test_permutation_invariance, test_all_dead_is_finite,
-               test_variable_token_count, test_step_time]:
+               test_variable_token_count, test_pooling_smoothness, test_step_time]:
         print(f"\n[{fn.__name__}]")
         fn()
     print("\nALL WP-D ACCEPTANCE TESTS PASSED")

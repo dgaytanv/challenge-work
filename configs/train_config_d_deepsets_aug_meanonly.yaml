@@ -1,0 +1,32 @@
+# WP-D: Deep Sets + B's generator, pooling=mean.
+# Motivation: masked max is the only non-smooth part of the encoder - if the arg-max
+# candidate falls in the dead region the pooled value jumps to the runner-up.
+# tests/test_set_encoders.py test_pooling_smoothness measures the worst single-candidate
+# deletion at init: mean 0.62x, mean+lse 0.62x, mean+max 1.45x the latent std.
+model_name: rt_d_deepsets_aug_meanonly
+data:
+  preproc_type: PFPreProcessor
+  val_split: 0.1
+  pairwise: false
+hyperparameters:
+  num_epochs: 25
+  early_stopping_patience: 5
+  batch_size: 256
+  mixed_prec: true
+  lr: 0.001
+  lr_min: 0.0
+  lr_warmup: 0.05
+  embed_size: 128
+  num_heads: 8
+  num_layers: 4
+  latent_dim: 6
+  proj_dim: 12
+  linear_dim: null
+  contrast_temp: 0.07
+  contrastive_weight: 0.05
+  contrastive_max: null
+  contrastive_warmup: 0.05
+  encoder_class: DeepSetsEncoder
+  use_degradation: true
+  encoder_kwargs:
+    pooling: mean
