@@ -46,10 +46,18 @@ Preprocessor: `PFPreProcessorMeanPt` — pt encoded as `log(pt_i / mean survivin
 and must match: `PFPreProcessor` and `PFPreProcessorMeanPt` have identical `state_dict` keys, so a
 mismatched `preproc_type` loads cleanly and silently computes the wrong feature.
 
+**This branch is deliberately training-free.** It ships only what the grader needs:
+`src/embedding/models.py`, `configs/train_config.yaml` and the single checkpoint. The
+training code lives on branch `wp-d` (commit `9801bdd`), which carries the
+`encoder_class` / `encoder_kwargs` / `use_degradation` hyperparameters that this branch's
+config deliberately omits — reproducing the encoder from `eval.py` must not depend on them.
+
+To retrain, from `wp-d` @ `9801bdd`:
+
 ```bash
 python train.py \
   --data_cfg configs/data_config_collide1m_small.yaml \
-  --train_cfg configs/train_config.yaml \
+  --train_cfg configs/train_config_d_deepsets_aug_meanpt.yaml \
   --data ~/hack-data/C9_robust_tagging/train/robust_tagging_train_data_small.pt \
   --outdir checkpoints
 ```
