@@ -63,6 +63,7 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
     consistency_weight = cfg.hp("consistency_weight", 1.0)
     consistency_mse_weight = cfg.hp("consistency_mse_weight", 0.1)
     instance_weight = cfg.hp("instance_weight", 0.0)
+    normalize_mse = cfg.hp("consistency_mse_normalized", True)
     seed = cfg.hp("seed", None)
     if seed is not None:
         torch.manual_seed(int(seed))
@@ -70,7 +71,8 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
         logger.info(f"Seeded RNG with {seed}")
     logger.info(
         f"two_view={two_view} consistency_weight={consistency_weight} "
-        f"consistency_mse_weight={consistency_mse_weight} instance_weight={instance_weight}"
+        f"consistency_mse_weight={consistency_mse_weight} instance_weight={instance_weight} "
+        f"consistency_mse_normalized={normalize_mse}"
     )
 
     logger.info("Scaler for mixed precision training: {}".format(mixed_prec))
@@ -207,6 +209,7 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
             consistency_mse_weight=consistency_mse_weight,
             instance_weight=instance_weight,
             instance_loss=instance_criterion,
+            normalize_mse=normalize_mse,
         )
         va = validate_epoch(
             encoder, 
@@ -228,6 +231,7 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
             consistency_mse_weight=consistency_mse_weight,
             instance_weight=instance_weight,
             instance_loss=instance_criterion,
+            normalize_mse=normalize_mse,
         )
 
         log_str = (
@@ -239,7 +243,9 @@ def main(data_path: str, cfg: train_config, cfg_data: data_config, test_mode: bo
             log_str += (
                 f" | TwoView: cons {tr['cons']:.6f}, mse {tr['cons_mse']:.6f}, inst {tr['inst']:.6f}, "
                 f"cos_tr {tr['cos']:.4f}, acc_deg_tr {tr['acc_deg']:.4f} | "
-                f"cos_val {va['cos']:.4f}, acc_deg_val {va['acc_deg']:.4f}"
+                f"cos_val {va['cos']:.4f}, acc_deg_val {va['acc_deg']:.4f} | "
+                f"rel_drift_tr {tr['rel_drift']:.4f}, pop_drift_tr {tr['pop_drift']:.4f}, "
+                f"rel_drift_val {va['rel_drift']:.4f}, pop_drift_val {va['pop_drift']:.4f}"
             )
         logger.info(log_str)
 

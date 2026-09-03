@@ -38,5 +38,5 @@ hyperparameters:
   consistency_weight: 1.0        # weight on mean(1 - cos(z_degraded, z_clean.detach()))
   consistency_mse_weight: 0.1    # weight on mse(z_degraded, z_clean.detach())
   instance_weight: 0.0           # SimCLR NT-Xent, positives = the other view only
-  consistency_mse_normalized: false   # run 1 used raw MSE; kept reproducible
+  consistency_mse_normalized: true   # displacement in units of clean-population spread
   seed: null                     # set an int for reproducible runs (acceptance test)
