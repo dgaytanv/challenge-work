@@ -125,6 +125,7 @@ def train_epoch(
     scaler=None,
     two_view=False, consistency_weight=1.0, consistency_mse_weight=0.1,
     instance_weight=0.0, instance_loss=None, normalize_mse=True, center_cos=True,
+    logit_consistency_weight=0.0, logit_consistency_loss=None,
 ):
     if two_view and degradation is None:
         raise ValueError(
@@ -140,7 +141,8 @@ def train_epoch(
 
     total_loss = total_contrast = total_ce = 0.0
     total_cons = total_cons_mse = total_inst = total_cos = 0.0
-    total_cos_shuf = total_pop_drift = total_drift_spread = 0.0
+    total_cos_shuf = total_pop_drift = total_drift_spread = total_jsd = 0.0
+    total_spread = total_offset = 0.0
     count = 0
     scheduled_contrst_wght = not (isinstance(contrastive_weight, int) or isinstance(contrastive_weight, float))
     class_metrics = ClassificationMetrics(num_classes)
@@ -186,6 +188,10 @@ def train_epoch(
             if two_view:
                 B = latent.size(0) // 2
                 z_c, z_d = latent[:B], latent[B:]
+                with torch.no_grad():
+                    _mu = z_c.mean(dim=0, keepdim=True)
+                    lat_spread = (z_c - _mu).norm(dim=-1).mean()   # per-event spread
+                    lat_offset = _mu.norm()                        # ||E[z]||
                 loss_cons, loss_cons_mse, cos_mean, cos_shuf, pop_drift, drift_spread = \
                     consistency_terms(z_d, z_c, normalize_mse=normalize_mse, center_cos=center_cos)
                 loss = loss + consistency_weight * loss_cons + consistency_mse_weight * loss_cons_mse
@@ -194,6 +200,14 @@ def train_epoch(
                     loss = loss + instance_weight * loss_inst
                 else:
                     loss_inst = torch.zeros((), device=latent.device)
+                # Penalise displacement where the probe can see it: the 4-class head's
+                # directions are a label-legal proxy for the probe's (WP-D measured that
+                # ~89% of the isotropic MSE budget goes on probe-invisible motion).
+                if logit_consistency_weight > 0.0 and logit_consistency_loss is not None:
+                    loss_jsd = logit_consistency_loss(logits[:B], logits[B:])
+                    loss = loss + logit_consistency_weight * loss_jsd
+                else:
+                    loss_jsd = torch.zeros((), device=latent.device)
 
         if use_amp:
             scaler.scale(loss).backward()
@@ -225,6 +239,9 @@ def train_epoch(
             total_cos_shuf += cos_shuf.item() * bs
             total_pop_drift += pop_drift.item() * bs
             total_drift_spread += drift_spread.item() * bs
+            total_jsd      += loss_jsd.item() * bs
+            total_spread   += lat_spread.item() * bs
+            total_offset   += lat_offset.item() * bs
             deg_metrics.update(logits[B:], labels[B:])
 
     out = {
@@ -242,6 +259,9 @@ def train_epoch(
             "cos_shuf": total_cos_shuf / count,
             "pop_drift": total_pop_drift / count,
             "drift_spread": total_drift_spread / count,
+            "jsd": total_jsd / count,
+            "lat_spread": total_spread / count,
+            "lat_offset": total_offset / count,
             "acc_deg":  deg_metrics.compute_metrics()["acc"],
         })
     return out
@@ -256,6 +276,7 @@ def validate_epoch(
     pairwise=False, num_classes=4,
     two_view=False, consistency_weight=1.0, consistency_mse_weight=0.1,
     instance_weight=0.0, instance_loss=None, normalize_mse=True, center_cos=True,
+    logit_consistency_weight=0.0, logit_consistency_loss=None,
 ):
     if two_view and degradation is None:
         raise ValueError(
@@ -271,7 +292,8 @@ def validate_epoch(
 
     total_loss = total_contrast = total_ce = 0.0
     total_cons = total_cons_mse = total_inst = total_cos = 0.0
-    total_cos_shuf = total_pop_drift = total_drift_spread = 0.0
+    total_cos_shuf = total_pop_drift = total_drift_spread = total_jsd = 0.0
+    total_spread = total_offset = 0.0
     count = 0
     scheduled_contrst_wght = not (isinstance(contrastive_weight, int) or isinstance(contrastive_weight, float))
     class_metrics = ClassificationMetrics(num_classes)
@@ -311,6 +333,10 @@ def validate_epoch(
         if two_view:
             B = latent.size(0) // 2
             z_c, z_d = latent[:B], latent[B:]
+            with torch.no_grad():
+                _mu = z_c.mean(dim=0, keepdim=True)
+                lat_spread = (z_c - _mu).norm(dim=-1).mean()   # per-event spread
+                lat_offset = _mu.norm()                        # ||E[z]||
             loss_cons, loss_cons_mse, cos_mean, cos_shuf, pop_drift, drift_spread = \
                     consistency_terms(z_d, z_c, normalize_mse=normalize_mse, center_cos=center_cos)
             loss = loss + consistency_weight * loss_cons + consistency_mse_weight * loss_cons_mse
@@ -319,6 +345,11 @@ def validate_epoch(
                 loss = loss + instance_weight * loss_inst
             else:
                 loss_inst = torch.zeros((), device=latent.device)
+            if logit_consistency_weight > 0.0 and logit_consistency_loss is not None:
+                loss_jsd = logit_consistency_loss(logits[:B], logits[B:])
+                loss = loss + logit_consistency_weight * loss_jsd
+            else:
+                loss_jsd = torch.zeros((), device=latent.device)
 
         bs = x.size(0)
         total_loss     += loss.item() * bs
@@ -334,6 +365,9 @@ def validate_epoch(
             total_cos_shuf += cos_shuf.item() * bs
             total_pop_drift += pop_drift.item() * bs
             total_drift_spread += drift_spread.item() * bs
+            total_jsd      += loss_jsd.item() * bs
+            total_spread   += lat_spread.item() * bs
+            total_offset   += lat_offset.item() * bs
             deg_metrics.update(logits[B:], labels[B:])
 
     out = {
@@ -351,6 +385,9 @@ def validate_epoch(
             "cos_shuf": total_cos_shuf / count,
             "pop_drift": total_pop_drift / count,
             "drift_spread": total_drift_spread / count,
+            "jsd": total_jsd / count,
+            "lat_spread": total_spread / count,
+            "lat_offset": total_offset / count,
             "acc_deg":  deg_metrics.compute_metrics()["acc"],
         })
     return out

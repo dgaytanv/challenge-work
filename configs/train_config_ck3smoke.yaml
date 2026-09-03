@@ -40,4 +40,5 @@ hyperparameters:
   instance_weight: 0.0           # SimCLR NT-Xent, positives = the other view only
   consistency_mse_normalized: true   # displacement in units of clean-population spread
   consistency_cos_centered: true    # cosine on latents centred by the clean batch mean
+  logit_consistency_weight: 1.0  # JSD(clean||degraded) on classifier softmax; 0 = off
   seed: null                     # set an int for reproducible runs (acceptance test)
