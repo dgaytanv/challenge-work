@@ -30,7 +30,12 @@ def set_safe_thread_count():
         except (FileNotFoundError, ValueError):
             pass
 
-    n = min(quota, os.cpu_count()) if quota else os.cpu_count()
+    # os.cpu_count() reports the physical host (128 here); the pod is limited by CPU affinity to 8.
+    try:
+        avail = len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        avail = os.cpu_count()
+    n = min(quota, avail) if quota else avail
     # Shared-box override: several training/eval processes share 8 cores tonight; the lock wrappers export
     # RT_NUM_THREADS so each process takes a fair share instead of one thread per core each.
     env = os.environ.get("RT_NUM_THREADS")
