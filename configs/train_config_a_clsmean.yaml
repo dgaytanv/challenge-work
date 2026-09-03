@@ -1,4 +1,8 @@
 model_name: robust_tagging
+# Phase-1 protocol (planner ruling): num_epochs 25, batch_size 256, patience 5.
+# Derived from train_config_b_aug_stock.yaml, changing ONLY the readout, so this lands
+# in the ablation table as 'transformer + aug + CLS+mean readout' against B's CLS row.
+# Tag: a-clsmean.
 
 # Consumed by train.py via cfg.get_trdata_cfg(...)
 data:
