@@ -113,3 +113,30 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+def markdown_table(path=None):
+    """Emit the accuracy-versus-bits table for writeup/G-quantization.md."""
+    rows = json.load(open(f'{Q}/g_sweep_table.json'))
+    order = {'gD-bits3-l1t': 3, 'gD-bits4-l1t': 4, 'gD-bits6-l1t': 6, 'gD-bits10-l1t': 10}
+    lines = ['| cap (bits) | mean w bits | mean act bits | EBOPs (N=200) | distill rms | mean_area | clean AUC | Δ vs stage A |',
+             '|---|---|---|---|---|---|---|---|']
+    for r in sorted(rows, key=lambda r: order.get(r['tag'], 99)):
+        if not r['tag'].startswith('gD-'):
+            continue
+        b = r['bench'] or {}
+        cap = order.get(r['tag'], '—')
+        ma = f"{b['mean_area']:.4f} ± {b.get('mean_area_std') or 0:.4f}" if b.get('mean_area') else 'not benched'
+        ca = f"{b['clean_auc']:.4f}" if b.get('clean_auc') else '—'
+        d = f"{b['mean_area'] - 0.8078:+.4f}" if b.get('mean_area') else '—'
+        lines.append(f"| {cap} | {r.get('mean_weight_bits') or 0:.2f} | {r.get('mean_act_bits') or 0:.2f} | "
+                     f"{r['ebops']:.3e} | {r['distill_rms']:.3f} | {ma} | {ca} | {d} |")
+    out = '\n'.join(lines)
+    print(out)
+    if path:
+        open(path, 'w').write(out)
+    return out
+
+
+if os.environ.get('G_MARKDOWN'):
+    markdown_table(os.environ.get('G_MARKDOWN_OUT'))
