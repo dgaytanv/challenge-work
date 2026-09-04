@@ -131,6 +131,18 @@ def main():
             if not os.path.exists(explicit):
                 print(f'{name:22s}  MISSING {explicit}'); continue
         else:
+            # A checkpoint existing is NOT a completed run: train.py writes a best-so-far
+            # file after every improving epoch. This guard was in the bench driver and NOT
+            # here, and as a result an early version of i_latent_geometry_all.json carried
+            # a row for i3_embed256_s22 computed on a partial checkpoint from a killed run
+            # (empty log, no released line). Same three-state collapse, third location.
+            logf = f'{args.ckptdir}/{name}.log'
+            done = False
+            if os.path.exists(logf):
+                done = any('] released' in ln and 'rc=0' in ln for ln in open(logf, errors='ignore'))
+            if not done:
+                print(f'{name:22s}  SKIP: training did not complete (no released rc=0 in its log)')
+                continue
             ck = sorted(glob.glob(f'{args.ckptdir}/{name}/*.pth'))
         if not ck:
             print(f'{name:22s}  no checkpoint'); continue
