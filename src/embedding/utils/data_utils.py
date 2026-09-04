@@ -59,10 +59,52 @@ def clean_data(data: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
 
     return feature_block, label_block
 
-def load_data(path: str, map_location: torch.device, max_events=-1) -> tuple[torch.Tensor, torch.Tensor]:
-    data = torch.load(path, map_location=map_location)
+def load_data(
+    path: str,
+    map_location: torch.device,
+    max_events: int = -1,
+    mmap: Union[bool, None] = None,
+    verify_finite: bool = True,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Load an event tensor and split it into features and labels.
+
+    The full train file is 12 GB. Read eagerly by five concurrent processes that is 60 GB and
+    slow; mapped it is one shared copy in the page cache. `mmap` defaults to True for files over
+    2 GB and False below, so the small file keeps campaign-1 behaviour exactly.
+
+    The mapping torch.load gives is MAP_PRIVATE, i.e. copy-on-write and writable, NOT read-only.
+    So the eager path's `clean_data` must not be used here: its in-place `nan_to_num_` would
+    quietly fault in and privatise the whole 12 GB in every process, reintroducing the problem
+    mmap is meant to solve while still looking like it worked. The mapped path therefore never
+    writes to the tensor; it verifies instead and fails loudly.
+    """
+    big = False
+    try:
+        big = os.path.getsize(path) > 2_000_000_000
+    except OSError:
+        pass
+    if mmap is None:
+        mmap = big
+    if not mmap:
+        data = torch.load(path, map_location=map_location)
+        data = data[:max_events] if max_events > 0 else data
+        return clean_data(data)
+
+    data = torch.load(path, map_location="cpu", mmap=True)
     data = data[:max_events] if max_events > 0 else data
-    return clean_data(data)
+    if verify_finite:
+        # Chunked so the check itself does not need 12 GB resident at once. Read-only: no
+        # nan_to_num_, so nothing is privatised. Measured 36 s on the full file, and it leaves
+        # the page cache warm for training, so it is not wasted work.
+        for i in range(0, data.shape[0], 16384):
+            if not torch.isfinite(data[i : i + 16384]).all():
+                raise ValueError(
+                    f"{path}: non-finite values in events {i}..{i + 16384}. The mapped loader "
+                    "does not repair data in place; clean the file offline."
+                )
+    feature_block = data[..., :-1]
+    label_block = data[:, 0, -1].long()
+    return feature_block, label_block
 
 def compute_class_weights(label_block: torch.Tensor, setting: Union[None, str, list] = None) -> torch.Tensor:
     """Compute class weights inversely proportional to class frequencies"""
