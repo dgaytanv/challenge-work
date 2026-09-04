@@ -128,7 +128,15 @@ def _patch_mask_fn():
 
     See the module docstring. Returns a list naming what was patched.
     """
+    import os as _os
+
     from hls4ml.backends.fpga.passes import hgq_proxy_model as HP
+
+    # WPG_NO_P3=1 disables the fold, so "stock hls4ml" and "with P3" can be synthesised as
+    # a controlled pair. Used to attribute Vitis's long Unroll/Inline phase to one or the
+    # other rather than guessing.
+    if _os.environ.get('WPG_NO_P3') == '1':
+        return ['P3 DISABLED by WPG_NO_P3=1 (stock hls4ml mask codegen)']
 
     if getattr(HP, '_wpg_mask_patched', False):
         return ['fixed-point quantizer mask folded over the token axis (already applied)']
