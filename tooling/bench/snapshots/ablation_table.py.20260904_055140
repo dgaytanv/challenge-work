@@ -1,0 +1,843 @@
+"""Collate benchmark JSONs in runs/ into one markdown ablation table.
+
+Every number here comes from a bench_eval.py JSON; nothing is recomputed by hand.
+
+Usage:
+  python ~/hackathon-shared/bench/ablation_table.py                      # every JSON, newest per tag
+  python ~/hackathon-shared/bench/ablation_table.py --all-runs           # keep every JSON, not just the newest per tag
+  python ~/hackathon-shared/bench/ablation_table.py --full-only          # only --full (whole eval set) runs
+  python ~/hackathon-shared/bench/ablation_table.py --plot a-cls,c-twoview-cos1
+  python ~/hackathon-shared/bench/ablation_table.py --plot all
+
+Writes runs/table.md and prints it. --plot writes runs/curves_<tag>.png.
+"""
+import argparse
+import glob
+import math
+import json
+import statistics
+import os
+import re
+import sys
+
+RUNS_DIR = os.path.expanduser("~/hackathon-shared/runs")
+ANCHOR_TAG = "anchor-stock-baseline"
+# The row that is actually being shipped. It is NOT the top row by mean_area, and the table says
+# so explicitly rather than leaving a reader to infer that the highest number won.
+CERTIFIED_TAG = "d-pma0-aug-meanpt"
+
+# Rows their author has retracted. Kept visible with the reason rather than deleted -- a number
+# that was quoted onward needs a visible retraction, not a silent disappearance -- but excluded
+# from every ranking, leader and separability computation.
+RETRACTED = {
+    "gB-q-b1e-5-relu-l1t": "RETRACTED by WP-G: harness bug (GELU emulator strict-loaded ReLU "
+                           "weights). Not a measurement.",
+}
+
+# Descriptions supplied by WP-G for their own rows; reproduced verbatim, not inferred from tags.
+ROW_NOTES_WPG = {
+    "g-stageA-l1t": "stage A, LayerNorm replaced by BatchNorm, float, distilled from the L1T float reference (swap cost only, no quantization)",
+    "gE-stageA-maskedbn-l1t": "stage A variant, BatchNorm statistics over live slots only",
+    "gB-q-b1e-6-l1t": "HGQ2 quantized from stage A, learned widths (about 8 bits), EBOPs regulariser beta0 1e-6 (beta later shown inert)",
+    "gD-bits10-l1t": "HGQ2 quantized from stage A, hard cap 10 bits (cap never binds; same configuration as gB-q-b1e-6-l1t, trained twice)",
+    "gD-bits6-l1t": "hard cap 6 bits (weights: total bits; activations: fractional bits, integer part free)",
+    "gD-bits4-l1t": "hard cap 4 bits",
+    "gD-bits3-l1t": "hard cap 3 bits, collapsed network (one distinct latent for all events), not an operating point",
+    "gD-relu-l1t": "ReLU instead of GELU, hard cap 8 bits",
+    "gF-bits6-relu-l1t": "ReLU, hard cap 6 bits (proposed operating point)",
+}
+# Column order for the per-family areas; any family not listed is appended in sorted order.
+# The five scoring families first, then the held-out ones (heldout_degradation.py).
+FAMILY_ORDER = ["rect", "wedge", "strip", "towers", "cells", "ellipse", "annulus", "diagonal",
+                "c_ellipse", "c_cell_dropout", "c_edge_truncation",
+                "c_rectangle", "c_eta_band", "c_phi_wedge", "c_multi_patch", "c_candidate_loss"]
+
+
+def load_runs(runs_dir):
+    """Split runs/*.json into bench runs (bench_eval.py) and official runs (accept.sh).
+
+    They are different measurements and are never averaged together: bench runs sweep our five
+    development families, official runs come from the organisers' degradation_eval.py.
+    """
+    runs, official = [], []
+    for path in sorted(glob.glob(os.path.join(runs_dir, "*.json"))):
+        try:
+            with open(path) as f:
+                d = json.load(f)
+        except (json.JSONDecodeError, OSError) as exc:
+            print(f"[ablation] skipping {os.path.basename(path)}: {exc}", file=sys.stderr)
+            continue
+        if not isinstance(d, dict):
+            continue
+        d["_path"] = path
+        if d.get("kind") == "official" and "official_area" in d:
+            official.append(d)
+        elif all(k in d for k in ("tag", "families", "mean_area")):
+            runs.append(d)
+        # anything else (auc_vs_severity.json, strays) is ignored
+    return runs, official
+
+
+# Explicit alias map for official records filed under a different tag from their bench row.
+# Deliberately NOT suffix-stripping or any other pattern guess at tag relationships: WP-F merged
+# the anchor with two mask-fix rows that way earlier tonight and silently dropped the anchor from
+# every figure. Each entry is verified by checkpoint identity before it is applied (below), so a
+# stale alias cannot quietly attach one model's official area to another model's row.
+OFFICIAL_TAG_ALIAS = {"a-pma-probe": "a-pma"}
+
+
+def apply_official_aliases(official, runs):
+    """Retag official records per OFFICIAL_TAG_ALIAS, but only if the checkpoint matches."""
+    bench_ckpt = {}
+    for r in runs:
+        bench_ckpt.setdefault(r["tag"], os.path.basename(r.get("ckpt", "")))
+    for rec in official:
+        target = OFFICIAL_TAG_ALIAS.get(rec["tag"])
+        if not target:
+            continue
+        want, got = bench_ckpt.get(target), os.path.basename(rec.get("ckpt", ""))
+        if want and got and want != got:
+            print(f"[ablation] NOT aliasing {rec['tag']} -> {target}: checkpoint mismatch "
+                  f"({got} vs {want})", file=sys.stderr)
+            continue
+        rec["tag"] = target
+    return official
+
+
+def official_by_tag(official):
+    """Pool official runs by (checkpoint basename, branch) -- NOT by tag.
+
+    The same measurement gets filed under different tags: the shipped checkpoint's officials are
+    split across `d-pma0-aug-meanpt` and `submission-final`, and a-pma's across `a-pma` and
+    `a-pma-probe`. Keyed by tag the winner reads n=2 spread 0.0004; pooled it is n=4 spread 0.0015,
+    so tag-keying understates the organisers' run-to-run noise on the exact shipped checkpoint by
+    nearly 4x -- in the column a tie-break depends on.
+
+    Why (ckpt, branch) and not (ckpt, commit): commits DIFFER within a single arm's officials
+    (the winner's span 3ac262f and 41d45a9, a README-only change; d-pma0-aug's span b50612d and
+    99b7d2e), so keying on commit splits exactly the runs that should pool. Why not ckpt alone:
+    WP-F merged the anchor with two mask-fix rows that way and dropped the anchor from every
+    figure -- one field is not enough. Branch identifies the model-and-code lineage while being
+    stable across cosmetic commits, and on the present data (ckpt, branch) reproduces the intended
+    grouping exactly.
+    """
+    by_key = {}
+    for r in sorted(official, key=lambda r: r.get("_path", "")):
+        key = (os.path.basename(r.get("ckpt", "")), r.get("branch"))
+        by_key.setdefault(key, []).append(r)
+    out = {}
+    for key, rs in by_key.items():
+        tag = rs[0]["tag"]
+        areas = [r["official_area"] for r in rs if not r.get("smoke_test")]
+        if not areas:
+            continue
+        n = len(areas)
+        # Sample std where we have repeats; for n=2 that is |a-b|/sqrt(2). Where n=1 we have no
+        # measurement, so fall back to a provisional floor (below) rather than pretending 0.
+        sd = statistics.stdev(areas) if n > 1 else None
+        out[key] = {"latest": areas[-1], "mean": statistics.mean(areas), "n": n,
+                    "spread": (max(areas) - min(areas)) if n > 1 else 0.0,
+                    "std": sd, "smoke": any(r.get("smoke_test") for r in rs),
+                    "tags": sorted({r["tag"] for r in rs}), "ckpt": key[0], "branch": key[1]}
+    return out
+
+
+def official_for_run(run, official):
+    """Find the official group for a bench row, matched on checkpoint basename."""
+    want = os.path.basename(run.get("ckpt", ""))
+    if not want:
+        return None
+    hits = [v for k, v in official.items() if k[0] == want]
+    if not hits:
+        return None
+    if len(hits) > 1:      # one checkpoint scored on two branches: prefer the most-measured
+        hits.sort(key=lambda v: -v["n"])
+        print(f"[ablation] {run['tag']}: checkpoint {want} has officials on "
+              f"{[h['branch'] for h in hits]}; using {hits[0]['branch']}", file=sys.stderr)
+    return hits[0]
+
+
+# Provisional per-run sigma for an official area with only one run. The organisers' Bernoulli mask
+# is unseeded ON TOP OF the unseeded probe refit, so this floor is wider than any bench floor.
+# Value is WP-D's observed spread between two runs of one checkpoint, used directly as a sigma,
+# which is deliberately conservative (a 2-sample spread overstates sigma by about sqrt(2)).
+OFFICIAL_FLOOR = 0.0024
+
+
+def official_separability(leader, row):
+    """3-sigma threshold on the difference of official-area means, same rule as the bench column."""
+    sa = leader["std"] if leader["std"] is not None else OFFICIAL_FLOOR
+    sb = row["std"] if row["std"] is not None else OFFICIAL_FLOOR
+    thr = 3.0 * math.sqrt(sa * sa / leader["n"] + sb * sb / row["n"])
+    delta = leader["mean"] - row["mean"]
+    return delta, thr, delta > thr
+
+
+def latest_per_tag(runs):
+    """Keep the newest JSON per (tag, full, family-set) key.
+
+    A 20k and a --full run of the same tag are different rows, and so are a scoring run and a
+    held-out run of the same tag -- otherwise one silently evicts the other.
+    """
+    best = {}
+    for r in runs:
+        key = (r["tag"], bool(r.get("full")), tuple(sorted(r["families"])))
+        cur = best.get(key)
+        if cur is None or r.get("timestamp", "") >= cur.get("timestamp", ""):
+            best[key] = r
+    return list(best.values())
+
+
+def family_columns(runs):
+    seen = set()
+    for r in runs:
+        seen.update(r["families"].keys())
+    cols = [f for f in FAMILY_ORDER if f in seen]
+    cols += sorted(seen - set(cols))
+    return cols
+
+
+# Non-scoring family sets. Anything whose families fall entirely inside this set is a diagnostic
+# run whose mean_area is NOT comparable to a scoring run's. Colleague families carry a `c_` prefix
+# because their suite and ours both contain a family named "ellipse".
+HELDOUT = {"ellipse", "annulus", "diagonal",
+           "c_ellipse", "c_cell_dropout", "c_edge_truncation",
+           "c_rectangle", "c_eta_band", "c_phi_wedge", "c_multi_patch", "c_candidate_loss"}
+
+# Per-refit std of mean_area, by architecture: the noise a SINGLE probe fit carries.
+# TransformerEncoder is measured (bench/probe_variance.py, stock ckpt, 20k, 10 refits).
+# The set-encoder value is WP-D's provisional figure and is ~4.75x larger, which is why a
+# Deep Sets row cannot be judged against the transformer's floor. Override with --floor.
+ARCH_FLOOR = {
+    "TransformerEncoder": 0.0008,   # measured
+    "DeepSetsEncoder": 0.0038,      # provisional (WP-D)
+    "PMAEncoder": 0.0038,           # provisional, assumed as DeepSets until measured
+}
+UNKNOWN_FLOOR = max(ARCH_FLOOR.values())   # conservative for an unrecognised encoder
+
+
+def row_sigma(run, floors):
+    """(per-refit std, repeats) for a row. Legacy rows are R=1 with the architecture floor."""
+    reps = int(run.get("probe_repeats", 1) or 1)
+    sd = run.get("mean_area_std")
+    if reps > 1 and sd is not None:
+        return float(sd), reps
+    return floors.get(run.get("encoder_class"), UNKNOWN_FLOOR), 1
+
+
+def separability(leader, run, floors):
+    """3-sigma threshold on the DIFFERENCE OF MEANS, and whether the gap clears it.
+
+    Rows are compared on the mean over refits, so each side contributes s^2/R, not s^2.
+    """
+    if run is leader:
+        return None, None, None
+    sa, ra = row_sigma(leader, floors)
+    sb, rb = row_sigma(run, floors)
+    thr = 3.0 * math.sqrt(sa * sa / ra + sb * sb / rb)
+    delta = leader["mean_area"] - run["mean_area"]
+    return delta, thr, delta > thr
+
+
+COLLEAGUE_FAMS = {f for f in HELDOUT if f.startswith("c_")}
+
+
+def data_label(run):
+    """Short label for the eval file a row was measured on. Rows on different files are NOT
+    comparable: a different detector acceptance is a different measurement, not a worse score."""
+    b = os.path.basename(run.get("data", "") or "")
+    if not b:
+        return "PF"                      # rows written before the field existed used the PF file
+    if "_l1t" in b:
+        return "L1T"
+    if "eval_small" in b:
+        return "PF"
+    return b.replace(".pt", "")[:12]
+
+
+def train_label(run):
+    """Which file the model was TRAINED on. null means not recorded and claims nothing -- it is
+    not evidence of the standard file. Distinguishes 'trained on PF, evaluated on L1T' from
+    'trained on L1T', which are different experiments that otherwise look identical in a row."""
+    t = run.get("train_data")
+    if not t:
+        return "—"
+    b = os.path.basename(t)
+    return "L1T" if "_l1t" in b else ("PF" if "train_data_small" in b else b.replace(".pt", "")[:10])
+
+
+def is_l1t(run):
+    return data_label(run) == "L1T"
+
+
+def suite_label(run):
+    """Which non-scoring suite a row came from -- ours or the colleague port. They are different
+    corruptions from different code and one of them has a family called `ellipse` too."""
+    fams = set(run["families"])
+    if fams and fams <= COLLEAGUE_FAMS:
+        return " _(colleague)_"
+    if fams and fams <= HELDOUT:
+        return " _(heldout)_"
+    return ""
+
+
+def is_heldout(run):
+    """A run scored only on held-out families: its mean_area is not comparable to the anchor's."""
+    return bool(run["families"]) and set(run["families"]).issubset(HELDOUT)
+
+
+def wpg_notes(rows):
+    """Per-row descriptions, supplied by their authors. Never inferred from a tag name."""
+    out = []
+    for r in rows:
+        t = r["tag"]
+        if t in RETRACTED:
+            out.append(f"- **`{t}`** — {RETRACTED[t]}")
+        elif t in ROW_NOTES_WPG:
+            out.append(f"- `{t}` — {ROW_NOTES_WPG[t]} *(per WP-G)*")
+    return ("**Row descriptions** (supplied by their authors; not inferred from tag names):\n\n"
+            + "\n".join(out)) if out else ""
+
+
+def build_table(runs, anchor_area, official=None, floors=None, show_official=True):
+    official = official or {}
+    floors = floors or ARCH_FLOOR
+    scoring = [r for r in runs if not is_heldout(r) and r["tag"] not in RETRACTED]
+    leader = max(scoring, key=lambda r: r["mean_area"]) if scoring else None
+    # The official column has its OWN leader: the two metrics rank differently, and comparing a
+    # row's official area to the bench leader's would mix the two rankings.
+    off_rows = [o for o in (official_for_run(r, official) for r in scoring) if o]
+    off_leader = max(off_rows, key=lambda o: o["mean"]) if off_rows else None
+    fams = family_columns(runs)
+    header = ["tag", "commit", "encoder", "data", "trained on", "events", "clean AUC"] + fams + ["mean_area", "delta", "sep. from top mean_area"] \
+             + (["official area", "official sep."] if show_official else [])
+    align = ["---"] + ["---:"] * (len(header) - 1)
+    lines = ["| " + " | ".join(header) + " |", "| " + " | ".join(align) + " |"]
+
+    for r in runs:
+        events = "full" if r.get("full") else f"{r.get('events', 0) // 1000}k"
+        mark = ""
+        if r["tag"] == CERTIFIED_TAG and not is_heldout(r):
+            mark = " **[CERTIFIED SUBMISSION]**"
+        # An L1T row whose scoring families were painted over the PF plane measures severity
+        # against an acceptance two thirds of which holds no candidates. Superseded by its
+        # eta_max=3 rerun, kept for continuity rather than deleted.
+        # eta_max_applies is absent on rows written before the flag existed. Do NOT default it to
+        # True: that marked the colleague L1T rows superseded, when eta_max shaped nothing about
+        # them (the colleague code carries its own eta range). Derive it instead from a recorded
+        # property of the measurement -- whether the row's families ARE the five scoring ones --
+        # which is precisely the condition the flag encodes. Same fallback WP-F uses.
+        applies = r.get("eta_max_applies")
+        if applies is None:
+            applies = not (set(r["families"]) & HELDOUT)
+        if is_l1t(r) and applies and float(r.get("eta_max", 5.0)) != 3.0:
+            mark += " _(superseded: eta_max 5)_"
+        if r["tag"] in RETRACTED:
+            mark += " **[RETRACTED]**"
+        cells = [
+            r["tag"] + suite_label(r) + mark,
+            str(r.get("commit", "?")),
+            str(r.get("encoder_class", "?")),
+            data_label(r),
+            train_label(r),
+            events,
+            f"{r.get('auc_clean_full', float('nan')):.4f}",
+        ]
+        for fam in fams:
+            entry = r["families"].get(fam)
+            cells.append(f"{entry['area']:.4f}" if entry else "-")
+        # bench_eval.py --probe_repeats reports mean +- std over refits of the unseeded probe.
+        # JSONs written before that flag existed are single fits: shown as n=1, not as +-0.0000.
+        reps = r.get("probe_repeats", 1)
+        sd = r.get("mean_area_std")
+        if reps > 1 and sd is not None:
+            cells.append(f"**{r['mean_area']:.4f}** ±{sd:.4f}")
+        else:
+            cells.append(f"**{r['mean_area']:.4f}** _(n=1)_")
+        if anchor_area is None or is_heldout(r):
+            # Delta against a five-scoring-family anchor is meaningless for a held-out run.
+            cells.append("-")
+        else:
+            delta = r["mean_area"] - anchor_area
+            cells.append(f"{delta:+.4f}")
+        if leader is None or is_heldout(r):
+            cells.append("-")
+        elif r is leader:
+            cells.append("**leader**")
+        else:
+            delta, thr, ok = separability(leader, r, floors)
+            cells.append(f"{'yes' if ok else '**no**'} (Δ{delta:.4f} vs {thr:.4f})")
+        if not show_official:
+            lines.append("| " + " | ".join(cells) + " |")
+            continue
+        o = official_for_run(r, official)
+        if o is None:
+            cells.append("-"); cells.append("-")
+        else:
+            txt = f"{o['mean']:.4f}"
+            if o["n"] > 1:
+                txt += f" (n={o['n']}, spread {o['spread']:.4f})"
+            else:
+                txt += " _(n=1)_"
+            if len(o["tags"]) > 1:
+                txt += f" _[{'+'.join(o['tags'])}]_"
+            cells.append(txt)
+            if off_leader is None or o is off_leader:
+                cells.append("**leader**" if o is off_leader else "-")
+            else:
+                d, t, ok = official_separability(off_leader, o)
+                cells.append(f"{'yes' if ok else '**no**'} (Δ{d:.4f} vs {t:.4f})")
+        lines.append("| " + " | ".join(cells) + " |")
+    return "\n".join(lines)
+
+
+def plot_curves(run, outdir):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    plt.figure(figsize=(7, 5))
+    for fam in family_columns([run]):
+        entry = run["families"][fam]
+        plt.plot(entry["severities"], entry["aucs"], marker="o",
+                 label=f"{fam} (area {entry['area']:.4f})")
+    # Same axes as eval.py's plot so the figure can go straight into the writeup.
+    plt.xlabel("Dropout severity (% of eta-phi plane)")
+    plt.ylabel("Macro AUC (linear probe on latents)")
+    plt.ylim(0, 1.05)
+    plt.grid(True, alpha=0.3)
+    plt.title(f"{run['tag']}  mean_area={run['mean_area']:.4f}")
+    plt.legend()
+    plt.tight_layout()
+    path = os.path.join(outdir, f"curves_{run['tag']}.png")
+    plt.savefig(path, dpi=200)
+    plt.close()
+    return path
+
+
+
+# --------------------------------------------------------------------------------------------
+# Campaign 2: seed-aware grouping. A single training run is an anecdote (00-common-v2.md); a
+# configuration is three seeds. This section reports the SEED std, which is a different and larger
+# quantity than the probe-refit std the rest of the table uses -- see the two-floor note.
+# --------------------------------------------------------------------------------------------
+
+SEED_SUFFIX = re.compile(r"-s(\d+)$")
+
+
+def config_key(tag):
+    """Configuration name = tag without its -s<seed> suffix. Returns (config, seed_from_tag)."""
+    m = SEED_SUFFIX.search(tag or "")
+    return (tag[:m.start()], int(m.group(1))) if m else (tag, None)
+
+
+def regime_of(run):
+    """Which data regime a row belongs to. `train_data` decides it (00-common-v2.md rule 5).
+
+    None is 'not recorded' and is kept as its own bucket rather than folded into the default: a
+    row that makes no claim about its training file must not be silently compared against one
+    that does. That is the same discipline as `train_data_recorded`.
+    """
+    td = run.get("train_data")
+    if not run.get("train_data_recorded", td is not None):
+        return "unrecorded"
+    return td or "unrecorded"
+
+
+def suite_of(run):
+    """Scoring / heldout / colleague / l1t bucket, so seeds are never pooled across suites."""
+    fams = set(run.get("families", {}))
+    parts = []
+    parts.append("l1t" if is_l1t(run) else "pf")
+    if any(f.startswith("c_") for f in fams):
+        parts.append("colleague")
+    elif is_heldout(run):
+        parts.append("heldout")
+    else:
+        parts.append("scoring")
+    if run.get("full"):
+        parts.append("full")
+    return "/".join(parts)
+
+
+def seed_groups(runs):
+    """Group runs into configurations. Key: (config, regime, suite). One row per seed."""
+    groups = {}
+    for r in runs:
+        cfg, seed_tag = config_key(r["tag"])
+        seed = r.get("seed", seed_tag)
+        if seed is None:
+            seed = seed_tag
+        key = (cfg, regime_of(r), suite_of(r))
+        groups.setdefault(key, {}).setdefault(seed, []).append(r)
+
+    # One SEED may have several bench rows. Two cases, and they are not the same thing:
+    #  - same checkpoint benched more than once (proved by ckpt_sha256): the spread between them
+    #    is PROBE noise, so averaging them is a better estimate of that checkpoint's mean_area than
+    #    discarding all but the newest. h-ref-small-s11 is exactly this -- two rows, 0.8250 and
+    #    0.8255, identical sha256, one from the durable copy and one from the training scratchpad.
+    #  - genuinely different checkpoints filed under one seed: ambiguous, and averaging would hide
+    #    it. Keep the newest and mark the group so the caller can say so.
+    out = {}
+    for key, per_seed in groups.items():
+        out[key] = {}
+        for seed, rs in per_seed.items():
+            shas = {r.get("ckpt_sha256") for r in rs if r.get("ckpt_sha256")}
+            if len(rs) > 1 and len(shas) <= 1:
+                merged = dict(max(rs, key=lambda r: r.get("timestamp", "")))
+                merged["mean_area"] = sum(r["mean_area"] for r in rs) / len(rs)
+                merged["auc_clean_full"] = sum(r["auc_clean_full"] for r in rs) / len(rs)
+                merged["_merged_benches"] = len(rs)
+                out[key][seed] = merged
+            else:
+                out[key][seed] = max(rs, key=lambda r: r.get("timestamp", ""))
+                if len(rs) > 1:
+                    out[key][seed] = dict(out[key][seed], _ambiguous_ckpt=len(shas))
+    return out
+
+
+def seed_stats(members):
+    """mean over seeds, seed std, n, mean per-seed probe std. Unmeasured stays None, never 0."""
+    areas = [m["mean_area"] for m in members]
+    n = len(areas)
+    probe_sds = [m.get("mean_area_std") for m in members if m.get("mean_area_std") is not None]
+    return {
+        "n": n,
+        "mean": statistics.mean(areas),
+        # Sample std needs n>=2. At n=3 it has 2 degrees of freedom and is itself a noisy
+        # estimate -- campaign 1 made exactly this mistake with n=2 ranges quoted as variances.
+        "seed_std": statistics.stdev(areas) if n > 1 else None,
+        "probe_std": statistics.mean(probe_sds) if probe_sds else None,
+        "clean": statistics.mean([m["auc_clean_full"] for m in members]),
+        "params": next((m.get("encoder_params") for m in members
+                        if m.get("encoder_params") is not None), None),
+        "areas": areas,
+    }
+
+
+def seed_separability(a, b):
+    """Pre-registered seed test: |dmean| > 3*sqrt(sa^2/na + sb^2/nb), s = SEED std.
+
+    Returns (delta, threshold, verdict). If either side has no seed std the test cannot be run --
+    that is 'unmeasured', not 'separable' and not 'tied'.
+    """
+    if a is None or b is None:
+        return (None, None, "no reference")
+    delta = a["mean"] - b["mean"]
+    if a["seed_std"] is None or b["seed_std"] is None:
+        return (delta, None, "unmeasurable (n=1 somewhere)")
+    thr = 3.0 * math.sqrt(a["seed_std"] ** 2 / a["n"] + b["seed_std"] ** 2 / b["n"])
+    if thr == 0:
+        return (delta, thr, "degenerate (zero seed spread)")
+    return (delta, thr, ("separable" if abs(delta) > thr else "not separable"))
+
+
+def build_seed_table(runs, reference_config=None):
+    """The campaign-2 view: one row per CONFIGURATION, not per run."""
+    groups = seed_groups([r for r in runs if r["tag"] not in RETRACTED])
+    if not groups:
+        return ""
+    # Reference is resolved per (regime, suite) so a candidate is only ever compared against a
+    # reference trained in the same data regime -- 00-common-v2.md rule 5.
+    refs = {}
+    if reference_config:
+        for (cfg, regime, suite), members in groups.items():
+            if cfg == reference_config:
+                refs[(regime, suite)] = seed_stats(list(members.values()))
+
+    lines = ["| configuration | regime | suite | seeds | mean_area (seed mean ± seed std) | "
+             "probe std | clean | params | vs reference |",
+             "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |"]
+    for (cfg, regime, suite), members in sorted(
+            groups.items(), key=lambda kv: -seed_stats(list(kv[1].values()))["mean"]):
+        st = seed_stats(list(members.values()))
+        seeds = ",".join(str(s) for s in sorted(members, key=lambda x: (x is None, x)))
+        sd = f"± {st['seed_std']:.4f}" if st["seed_std"] is not None else "± —"
+        probe = f"{st['probe_std']:.4f}" if st["probe_std"] is not None else "—"
+        params = f"{st['params']:,}" if st["params"] is not None else "—"
+        ref = refs.get((regime, suite))
+        if ref is not None and cfg == reference_config:
+            verdict = "*(reference)*"
+        else:
+            d, thr, v = seed_separability(st, ref)
+            verdict = (f"{d:+.4f} vs {thr:.4f} — **{v}**" if thr is not None
+                       else (f"{d:+.4f} — {v}" if d is not None else v))
+        lines.append(f"| `{cfg}` | {regime} | {suite} | {st['n']} ({seeds}) | "
+                     f"{st['mean']:.4f} {sd} | {probe} | {st['clean']:.4f} | {params} | {verdict} |")
+    return "\n".join(lines)
+
+
+
+FINGERPRINTS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                 "corruption_fingerprints.json")
+
+
+def _load_fingerprints():
+    try:
+        return json.load(open(FINGERPRINTS_PATH))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def fingerprint_mismatches(runs):
+    """Rows that applied a DIFFERENT corruption than their family name claims.
+
+    The ellipse swap (04:00, 2026-09-04) was invisible in every field a consumer reads -- tag,
+    families_arg, the family key, eta_max_applies all said 'our held-out ellipse' while the run
+    had applied Group 3's. Only `dropped_fraction` disagreed, and nothing checked it. The map
+    digest makes that a check that runs rather than a field nobody reads.
+
+    Rows written before bench_eval recorded fingerprints have none; that is 'unverified', which is
+    reported separately from 'mismatched'. An eta_max other than the reference's changes the
+    scoring maps legitimately, so those rows are skipped rather than flagged.
+    """
+    ref = _load_fingerprints()
+    if not ref:
+        return [], []
+    bad, unverified = [], []
+    for r in runs:
+        for fam, blk in (r.get("families") or {}).items():
+            exp = ref["families"].get(fam)
+            if not exp:
+                continue                       # colleague families carry no reference map
+            got = blk.get("map_sha256")
+            if not got:
+                unverified.append((r.get("tag"), fam))
+                continue
+            if exp.get("eta_max") is not None and r.get("eta_max") != exp["eta_max"]:
+                continue                       # a different acceptance paints a different map
+            if [g for g in got] != exp["map_sha256"]:
+                bad.append((r.get("tag"), fam, r.get("_path", ""),
+                            blk.get("degradation_class")))
+    return bad, unverified
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--runs_dir", default=RUNS_DIR)
+    ap.add_argument("--full-only", action="store_true", help="only runs benchmarked with --full")
+    ap.add_argument("--all-runs", action="store_true", help="keep every JSON, not just the newest per tag")
+    ap.add_argument("--anchor", default=ANCHOR_TAG, help="tag whose mean_area the delta column is measured against")
+    ap.add_argument("--plot", default=None, help="comma-separated tags, or 'all', to write runs/curves_<tag>.png")
+    ap.add_argument("--floor", default=None,
+                    help="override per-refit sigma, e.g. 'DeepSetsEncoder=0.0031,PMAEncoder=0.0029'")
+    ap.add_argument("--out", default=None, help="output markdown path (default <runs_dir>/table.md)")
+    ap.add_argument("--seed-reference", default=None,
+                    help="configuration name (tag without -s<seed>) to run the campaign-2 seed "
+                         "test against, e.g. h-champion-small. Resolved separately per data "
+                         "regime and suite, so a candidate is only compared with a reference "
+                         "trained on the same file.")
+    ap.add_argument("--no-seed-table", action="store_true",
+                    help="omit the per-configuration seed section")
+    args = ap.parse_args()
+
+    runs, official_runs = load_runs(args.runs_dir)
+    official_runs = apply_official_aliases(official_runs, runs)
+    official = official_by_tag(official_runs)
+    if not runs and not official:
+        print(f"[ablation] no benchmark JSONs found in {args.runs_dir}")
+        return
+
+    # The anchor is picked before --full-only/--latest filtering so the delta column keeps
+    # its meaning even when the anchor row itself is filtered out of the table.
+    anchor_candidates = [r for r in runs if r["tag"] == args.anchor and not is_heldout(r)]
+    anchor_area = max(anchor_candidates, key=lambda r: r.get("timestamp", ""))["mean_area"] if anchor_candidates else None
+    if anchor_area is None:
+        print(f"[ablation] anchor tag '{args.anchor}' not found; delta column left blank", file=sys.stderr)
+
+    # The seed table must see EVERY run, not the newest per tag. latest_per_tag() keeps one row
+    # per tag, so three seeds filed under one tag (distinguished only by the `seed` field, which
+    # is a legal way to tag them) collapse to n=1 and the configuration silently looks like an
+    # anecdote. Found by a synthetic 3-seed fixture before any real seeded run existed. This is
+    # register failure class 1 -- grouping on one field and dropping rows -- in a new place.
+    # seed_groups() does its own de-duplication, per (config, regime, suite, SEED).
+    runs_all_seeds = list(runs)
+    if args.full_only:
+        runs = [r for r in runs if r.get("full")]
+        runs_all_seeds = [r for r in runs_all_seeds if r.get("full")]
+    if not args.all_runs:
+        runs = latest_per_tag(runs)
+    if not runs:
+        print("[ablation] no runs left after filtering")
+        return
+
+    floors = dict(ARCH_FLOOR)
+    if args.floor:
+        for item in args.floor.split(","):
+            k, v = item.split("="); floors[k.strip()] = float(v)
+
+    runs.sort(key=lambda r: r["mean_area"], reverse=True)
+    # Scoring rows and diagnostic rows share no family columns, so putting them in one table
+    # leaves most cells empty and pushes the numbers that matter off the side. Two tables.
+    # The PF ranking is the ruling. L1T rows are a different acceptance the models were never
+    # trained on, so they get their own block and are never interleaved with the ranking.
+    scoring_rows = [r for r in runs if not is_heldout(r) and not is_l1t(r)]
+    l1t_rows = [r for r in runs if is_l1t(r)]
+    diag_rows = [r for r in runs if is_heldout(r) and not is_l1t(r)]
+    table = build_table(scoring_rows, anchor_area, official, floors)
+    if l1t_rows:
+        table += ("\n\n### L1T eval file (different acceptance, not trained on)\n\n"
+                  "These models were trained and selected on the PF-candidate acceptance "
+                  "(`eta in [-5, 5]`). The L1T/PUPPI file is `eta in [-3, 3]` with a higher pt "
+                  "floor, so these numbers are **the same models meeting a different detector**, "
+                  "not a better or worse score on the same task. Do not rank against the table "
+                  "above. The official-area columns are omitted here: every official run was "
+                  "measured on the PF file, so an official number has no meaning beside an L1T "
+                  "row. **Check the `trained on` column**: rows trained on PF and merely evaluated "
+                  "on L1T answer a different question from rows trained on L1T, and only the latter "
+                  "are a like-for-like comparison with each other.\n\n"
+                  + build_table(l1t_rows, None, official, floors, show_official=False)
+                  + "\n\n" + wpg_notes(l1t_rows))
+    if diag_rows:
+        table += ("\n\n### Diagnostic runs (non-scoring families)\n\n"
+                  "Held-out families (`ellipse`/`annulus`/`diagonal`, ours) and the colleague suite "
+                  "(`c_` prefix, Group 3's code). **These `mean_area` values are not comparable to "
+                  "the scoring table above, nor to each other across suites** -- different shapes, "
+                  "different severity semantics. See the colleague caveats in the notes.\n\n"
+                  "Official-area columns are omitted for the same reason as the L1T block.\n\n"
+                  + build_table(diag_rows, None, official, floors, show_official=False))
+
+    # Campaign-2 section: one row per CONFIGURATION over its seeds. Placed before the per-run
+    # tables because from campaign 2 the configuration, not the run, is the unit of evidence.
+    seed_section = ""
+    if not args.no_seed_table:
+        body = build_seed_table(runs_all_seeds, args.seed_reference)
+        if body:
+            seed_section = (
+                "\n\n## Per-configuration (campaign 2: 3 seeds per configuration)\n\n"
+                "Rows are grouped by configuration (tag without its `-s<seed>` suffix) and by data "
+                "regime (`train_data`) and suite; seeds are never pooled across regimes or suites. "
+                "**The ± here is the SEED std, not the probe std** -- a different and larger "
+                "quantity, shown beside it. A configuration with one seed has an *unmeasured* seed "
+                "std, printed `—`, and the seed test then reports `unmeasurable` rather than a "
+                "verdict: n=1 is an anecdote, not a tie.\n\n"
+                "Separability is the pre-registered seed test, `|dmean| > 3*sqrt(sa^2/na + sb^2/nb)` "
+                "with s the seed std. At n=3 that std carries 2 degrees of freedom and is itself "
+                "noisy, so a verdict near the threshold should be read as 'not resolved by three "
+                "seeds', not as a fact about the models. **The error runs both ways: a seed std "
+                "that happens to be tiny at n=3 does not license a claim either** -- three "
+                "accidentally close runs shrink the threshold and can separate a pair that a "
+                "fourth seed would re-tie. Campaign 1 quoted an n=2 range as if it were a "
+                "variance and had to retract the ordering it implied.\n\n"
+                + body + "\n")
+            if not args.seed_reference:
+                seed_section += ("\n_No `--seed-reference` given, so the `vs reference` column is "
+                                 "blank. Pass the reference configuration for this regime._\n")
+
+    bad_fp, unver_fp = fingerprint_mismatches(runs_all_seeds)
+    fp_section = ""
+    if bad_fp:
+        fp_section = ("\n\n> **CORRUPTION FINGERPRINT MISMATCH -- these rows did not measure what "
+                      "their family name says.** The map digest is independent of the eval file, "
+                      "the model and the probe, so a mismatch means a different corruption was "
+                      "applied. Do not use these numbers.\n\n"
+                      + "\n".join(f"> - `{t}` family `{f}` (applied `{c}`) -- `{os.path.basename(p)}`"
+                                   for t, f, p, c in bad_fp) + "\n")
+    elif unver_fp:
+        fp_section = (f"\n\n_Corruption fingerprints: no mismatches. "
+                      f"{len(unver_fp)} family-row(s) predate the fingerprint field and are "
+                      f"unverified rather than verified-clean._\n")
+
+    anchor_note = f"Delta is vs `{args.anchor}` (mean_area {anchor_area:.4f})." if anchor_area is not None else ""
+    doc = "\n".join([
+        "# Robust tagging ablation table",
+        "",
+        "> **The floor that matters is the TRAINING SEED, not the probe.** Campaign-2 reference "
+        "`h-ref-small` (champion config, small file, three seeds): 0.8250 / 0.8296 / 0.8239 "
+        "(`runs/h-ref-small-s{11,22,33}_*.json`), **seed mean 0.8262, seed std 0.0030, range "
+        "0.0057**, clean 0.9220 ± 0.0033. The three-seed separability bar against another n=3 "
+        "configuration is therefore **about 0.0074** -- an order of magnitude above the per-refit "
+        "probe sigma (0.0008 transformer, 0.0020-0.0038 set encoders) that campaign 1 thresholded "
+        "on.",
+        "",
+        "> **Campaign-1 reading note** (planner, binding; also in `writeup/RULING.md` addendum "
+        "04:33). Campaign-1 bench separabilities between single training runs were computed "
+        "against probe noise only; **gaps under about 0.006 are unproven**, including `a-pma` vs "
+        "the winner (0.0022) and the winner vs the runner-up (0.0074, at the bar). The "
+        "winner-vs-anchor gap (0.0526) stands. Unproven means not established by the evidence "
+        "available, not refuted -- none of those pairs was measured with seeds.",
+        "",
+        f"Generated from `{args.runs_dir}` by `bench/ablation_table.py`. "
+        f"{len(runs)} bench run(s), {len(official_runs)} official run(s). {anchor_note}",
+        "",
+        "`mean_area` is our five-family development bench (`bench_eval.py`) and is the number we "
+        "steer on. `official area` comes from `accept.sh` running the organisers' `eval.py`, which "
+        "now imports their `degradation_eval.py`. The two are **not comparable to each other**: "
+        "different corruptions, different sweeps. The official grid is marked TEMPORARY upstream "
+        "and is stated to change before judging, so nothing is tuned to it. Its Bernoulli drop also "
+        "uses the global RNG unseeded, so repeated runs of the same checkpoint differ; where a tag "
+        "has more than one official run the spread is shown.",
+        "",
+        "> **The top row by `mean_area` is NOT the submission.** The shipped model is the row "
+        "marked **[CERTIFIED SUBMISSION]**. The two are statistically indistinguishable; the "
+        "smaller one was kept under a margin rule fixed before the deciding number existed, and it "
+        "is 27.3x smaller. Details below. The separability column compares each row to the "
+        "top-`mean_area` row, which is a ranking aid, not a verdict on what shipped.",
+        "",
+        "**FINAL RULING.** `submission-pma0-meanpt` @`41d45a9` is the certified submission "
+        "(certified tip = shipped tip; two fresh-clone PASS runs, official 0.8780 full / 0.8795 on "
+        "the shipped hash). It is retained, but **not because it measured better.** Against "
+        "`a-pma` (transformer body + PMA readout + *stock* preprocessor), **neither metric "
+        "separates this pair at the measured floors** (planner, campaign 2, 04:33). Bench 0.8260 "
+        "vs 0.8275 is a gap of 0.0022 against a three-seed bar of about 0.0074; official 0.8788 "
+        "(n=2) vs 0.8793 (n=1) is inside the observed run-to-run spread. The earlier reading -- "
+        "that the bench and the official metric disagreed, with a-pma separably ahead on bench and "
+        "held-out -- is **withdrawn**: those separabilities were computed against probe noise only, "
+        "and campaign 2 measured the training-seed floor that dominates it. "
+        "The retention rests on three things that are not the metric: the **pre-registered margin "
+        "rule** adopted by the user (both a-pma officials had to exceed 0.8820; run 1 at 0.8793 "
+        "fails it), the fact that the certified chain is **already complete** on a shipped tip, "
+        "and a **27.3x size difference** (89,606 encoder parameters against 2,445,478) at "
+        "statistically indistinguishable robustness -- which for a Fast ML challenge is the more "
+        "decision-relevant axis once the metric is exhausted. Stated plainly: the two models reach "
+        "the same place by different routes, a-pma has a slight and partly separable edge on the "
+        "measurements, and the smaller model was kept under a rule fixed before the deciding "
+        "number existed.",
+        "",
+        "**Tie-break order** (planner ruling, amended 22:2x before held-out landed): "
+        "**1.** `mean_area` over probe refits. **2.** official area. **3.** lower variance of the "
+        "*scored* quantity -- official spread first, then bench sigma. **4.** clean AUC. "
+        "Tie-break 3 precedes clean AUC because the grading is a single unseeded draw, so a "
+        "candidate whose own runs scatter widely is a worse bet at equal mean; and because clean "
+        "AUC is one point of an eleven-point sweep and is not the quantity being scored. A tie "
+        "created by one candidate's variance must not then be resolved in that candidate's favour "
+        "by an unscored number. Every comparison at every step uses the 3-sigma rule below; a step "
+        "only passes to the next when the candidates are **not** separable at that step.",
+        "",
+        "**Two floors.** The `±s` below is the PROBE floor -- noise in scoring a fixed checkpoint. "
+        "Comparisons between two independently TRAINED models carry a second, larger floor: WP-G's "
+        "`gB-q-b1e-6-l1t` and `gD-bits10-l1t` are the same configuration trained twice and differ "
+        "by 0.0008, and that pair used a short distillation schedule from a shared seed checkpoint, "
+        "so it is a lower bound. **Practical reading: a bench gap below ~0.002 between two "
+        "independently trained full models is unproven, not established.** The ruling's "
+        "comparisons clear it (0.0074 winner-vs-runner-up; 0.0022 a-pma at R=20).",
+        "",
+        "`eval.py` seeds nothing, so its linear probe is refit differently on every run and every "
+        "area inherits that noise. `mean_area ±s` is the standard deviation over `--probe_repeats` "
+        "refits of one frozen set of embeddings; rows marked _(n=1)_ predate that flag and are "
+        "single fits with an unmeasured error. **Do not rule between two arms whose mean_area "
+        "differs by less than ~3s.** The per-severity errors are correlated (one probe is applied "
+        "frozen across all severities), so threshold on the mean_area s rather than propagating "
+        "per-point errors, which would double-count.",
+        "",
+        fp_section,
+        seed_section,
+        "",
+        table,
+        "",
+    ])
+    out = args.out or os.path.join(args.runs_dir, "table.md")
+    with open(out, "w") as f:
+        f.write(doc)
+    print(doc)
+    print(f"[ablation] wrote {out}")
+
+    if args.plot:
+        wanted = None if args.plot == "all" else set(args.plot.split(","))
+        for r in runs:
+            if wanted is None or r["tag"] in wanted:
+                print(f"[ablation] wrote {plot_curves(r, args.runs_dir)}")
+
+
+if __name__ == "__main__":
+    main()

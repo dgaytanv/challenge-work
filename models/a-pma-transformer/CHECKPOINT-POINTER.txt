@@ -1,0 +1,15 @@
+OVER THE 5 MB HAND-OVER CAP -- not copied into this branch.
+
+  size    29516803 bytes (28.1 MB)
+  sha256  f64d0154289321bbfcccad02f949fd6c5fa78a009d33a9e770c546d8cee642bf
+  ships   branch submission-a-pma, commit d450bcf
+  path    checkpoints/a_pma_submission.pth
+
+Fetch it with:
+
+  git clone --branch submission-a-pma <repo> a-pma && cd a-pma
+  # the checkpoint is already in the tree at checkpoints/a_pma_submission.pth
+  sha256sum checkpoints/a_pma_submission.pth   # expect f64d0154289321bbfcccad02f949fd6c5fa78a009d33a9e770c546d8cee642bf
+
+It is large because the file carries optimizer and scheduler state alongside the
+weights; the encoder itself is 2,445,478 parameters.

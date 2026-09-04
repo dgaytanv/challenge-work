@@ -1,93 +1,97 @@
-## Robust Tagging Challenge
+# Robust Tagging (Fast ML 2026, Challenge C9) — team hand-over
 
-Train a model whose anomaly-detection performance stays robust as more of the detector drops out. See `hackathon_playground.ipynb` for the full challenge writeup, scoring details, and what you're expected to edit.
+This repository holds our submission, the evidence behind it, the tooling that produced the evidence, and the record of two
+overnight campaigns. Everything a teammate needs to reproduce, re-verify or continue the work is here or pointed to from here.
 
-Built by Arianna Cox and Ellison Scheuller.
+## What we submit
 
-Special thanks to Roy Cruz Candelaria, Maciej Glowacki, and Mehrnoosh Moallemi for the contrastive model baseline used in this challenge.
+**Model:** an attention-pooled set encoder (`PMAEncoder`, `num_layers: 0`): a per-candidate MLP (14 → 128 → 128, LayerNorm, GELU),
+pooling by multi-head attention over four learned seed queries, LayerNorm, a linear head to a 6-d latent. 89,606 parameters.
+**Preprocessor:** `PFPreProcessorMeanPt` (each candidate's pt normalised by the mean surviving pt instead of the sum).
+**Training:** 25 epochs, batch 256, on `robust_tagging_train_data_small.pt`, against a broad simulated dead-region generator
+(five shape families, exact φ rotation and η reflection, curriculum warm-up).
 
-### Setup in JupyterHub
+| benchmark | ours | reference |
+|---|---|---|
+| organisers' `eval.py`, eight independent runs | 0.8774 – 0.8805 | organisers' stock checkpoint 0.8201 |
+| our five-family development bench, three training seeds | 0.8262 ± 0.0030 | stock checkpoint 0.7734 |
+| held-out corruption shapes (never trained on) | 0.802 | |
+| Group 3's corruption suite, like for like (same training file, same eval file, one probe) | 0.8270 | their best 0.8107 |
 
-1. Launch a server in JupyterHub (with the GPU attached) and open a terminal.
-2. Clone this repo and `cd` into it:
-   ```bash
-   git clone https://github.com/ellisonscheuller/robust_tagging_fastml_hackathon.git robust-tagging
-   cd robust-tagging
-   ```
-3. Install the project (installs `embedding` in editable mode plus its dependencies):
-   ```bash
-   pip install -e .
-   ```
-4. Open `hackathon_playground.ipynb` in JupyterLab and run the cells top to bottom.
-   - The notebook must be run from the root of your repo copy (where this README lives) — that's the default JupyterLab working directory when you open a notebook there.
-   - Training/eval data is read directly from the shared PVC at `~/hack-data/C9_robust_tagging/{train,eval}` — you don't need to download or convert anything.
-   - Your own checkpoints and plots are written locally into `./checkpoints` and `./eval_plots` inside your repo copy, so they never collide with other participants sharing the same PVC.
+The shipped commit is the branch `submission-pma0-meanpt` at `41d45a9` (this branch adds documentation on top of it; the code,
+config and checkpoint are byte-identical). `docs/SUBMISSION-HANDOVER.md` lists the checkpoint's sha256 and every official measurement.
 
-### What you'll edit
+## Evaluate any of our models
 
-- **`src/embedding/degradation.py`** — `Degradation.forward()` is a stub. This simulates detector dropout: `train.py` calls it with `severity=None` (implement your own randomized augmentation), `eval.py` calls it with a fixed `severity` for each step of the AUC-vs-severity sweep. Keep the class signature so both call sites keep working.
-- **`src/embedding/models.py`** — the baseline architecture (`TransformerEncoder`, `Projector`, ...). Change layers, swap the encoder, add heads — anything, as long as it still produces a latent embedding.
-- **`configs/train_config.yaml`** — hyperparameters (lr, embed size, loss weights, etc.).
+`models/MODELS.md` indexes the best checkpoint of every model we trained, each in its own directory with the checkpoint (or a pointer to the
+branch that ships it), the exact train config, `BUILD.md` (code commit, encoder and preprocessor classes, alias if any) and `evaluate.sh`,
+which runs the organisers' `eval.py` from a fresh clone of the right branch and our bench with the right classes. Models: the champion,
+the Deep Sets runner-up, the transformer-body variant (a-pma), the champion with the stock preprocessor, the champion recipe trained on
+the L1T file, the HGQ2 quantized operating point (L1T), and the two campaign-2 candidates (latent 32; one block with a 256-wide feed-forward).
 
-### Scoring
-
-At eval time the model sees both background and signal events and outputs a per-event anomaly score, scored via AUC vs. degradation severity. A robust model keeps a high AUC as more of the detector goes dark; your score is the area under that curve. `eval.py` overlays a red "(No degradation)" reference curve against your model's ("Your solution") on the same plot.
-
-`eval.py` here uses **your own** `degradation.py` to simulate severity locally — it's for testing your own approach, not the official scoring run. For judging, we'll degrade the eval set ourselves with a method we're not disclosing in advance (conceptually it kills off geometric η–φ regions, similar to real detector dead zones), so solutions aren't tuned to the exact grading procedure.
-
-## How to reproduce (WP-D submission: PMA set encoder + MeanPt)
-
-**Encoder:** `PMAEncoder` with `num_layers=0` — a per-particle MLP followed by pooling by multihead
-attention over 4 learned seed queries. No self-attention stack, so cost is O(N) in candidates, and
-deleting a candidate removes its terms from a masked pooling rather than perturbing an attention
-normalisation over the survivors. It is aliased to `TransformerEncoder` at the end of
-`src/embedding/models.py`, so the organisers' `eval.py` builds it with no changes: it takes that
-constructor signature and honours that forward contract.
-
-`eval.py` passes **no keyword arguments**, so every option is a constructor default. The one
-architectural setting it *does* pass from the config is `num_layers`, so `configs/train_config.yaml`
-says `0` **and** the class default is `0`: a missing key cannot silently build a different
-architecture, and a wrong value fails loudly at `load_state_dict`.
-
-**Preprocessor:** `PFPreProcessorMeanPt` — pt encoded as `log(pt_i / mean surviving pt)`. This must
-match: `PFPreProcessor` and `PFPreProcessorMeanPt` have **identical `state_dict` keys**, so a
-mismatched `preproc_type` loads cleanly and silently computes the wrong feature.
-
-**This branch is deliberately training-free.** It ships `src/embedding/models.py`,
-`configs/train_config.yaml` and the single checkpoint, which is everything `eval.py` needs. The
-training code is on branch `wp-d` (commit `9801bdd`), which carries the `encoder_class` /
-`encoder_kwargs` / `use_degradation` hyperparameters this branch's config deliberately omits —
-rebuilding the encoder from `eval.py`'s signature must not depend on them.
-
-To retrain, from `wp-d` @ `9801bdd`:
+## Run the grader on the submission
 
 ```bash
-python train.py \
-  --data_cfg configs/data_config_collide1m_small.yaml \
-  --train_cfg configs/train_config_d_pma0_aug_meanpt.yaml \
-  --data ~/hack-data/C9_robust_tagging/train/robust_tagging_train_data_small.pt \
-  --outdir checkpoints
+git clone <this repo> robust-tagging && cd robust-tagging
+pip install -e .                                   # or use the organisers' environment
+python eval.py --data_cfg configs/data_config_eval.yaml \
+               --train_cfg configs/train_config.yaml \
+               --encoder checkpoints/rt_d_pma0_aug_meanpt_encoder_20260903_221125.pth \
+               --data ~/hack-data/C9_robust_tagging/eval/robust_tagging_eval_small.pt --outdir eval_plots
 ```
+`eval.py` constructs the encoder under the grader's class name; `src/embedding/models.py` aliases `TransformerEncoder` to `PMAEncoder`,
+and `num_layers: 0` is both the config value and the class default, so the shipped config alone rebuilds the model.
+The grader's probe is unseeded: one run of `eval.py` varies by about ±0.002; never quote a single run as exact.
 
-Data: `robust_tagging_train_data_small.pt` ([80000, 200, 8], four background classes).
-25 epochs, batch 256, patience 5, WP-B's dead-region generator as augmentation.
+## Reproduce the training
 
-**Shipped checkpoint:** `checkpoints/rt_d_pma0_aug_meanpt_encoder_20260903_221125.pth` — the only
-`.pth` on this branch, via a `.gitignore` exception, because the organisers' notebook selects with
-`sorted(glob("checkpoints/*.pth"))[-1]` and asserts if that is empty.
+```bash
+git checkout wp-d            # training branch (commit 9801bdd); or integration-2 for the campaign-2 tooling
+python train.py --data_cfg configs/data_config_collide1m_small.yaml \
+                --train_cfg configs/train_config_d_pma0_aug_meanpt.yaml \
+                --data ~/hack-data/C9_robust_tagging/train/robust_tagging_train_data_small.pt --outdir checkpoints
+```
+About 10 minutes on one A10. Expect mean_area between 0.824 and 0.830 on the development bench: the training-seed spread of this recipe
+is 0.0030 (measured on three seeds in each of two data regimes), roughly ten times the probe noise.
 
-**Measured** (JSONs in `~/hackathon-shared/runs/`):
+## Measure a model the way we did
 
-| metric | value |
-|---|---|
-| bench `mean_area` (5 families, 20k events, 5 probe refits) | 0.8260 +- 0.0009 |
-| official `eval.py` area (70k events, 10 severities) | 0.8790 and 0.8786 |
-| held-out families (ellipse, annulus, diagonal) | 0.8021 +- 0.0006 |
-| clean AUC | 0.9147 |
-| cost | 0.090 M parameters, 11.9 ms per training step |
+`tooling/bench/bench_eval.py` is the ruler: five seeded corruption families on 20k eval events, five probe refits, mean ± std.
+```bash
+python tooling/bench/bench_eval.py --repo <clone> --ckpt <checkpoint> --tag <name> \
+       --encoder_class PMAEncoder --train_cfg <the config the checkpoint was trained with> --probe_repeats 5
+```
+Add `--families heldout` (our held-out shapes), `--families colleague` (Group 3's suite, `c_` prefix), `--data ..._l1t.pt --eta_max 3.0`
+(the L1T acceptance), `--train_data <basename>` and `--seed` so the row is fully described. `tooling/bench/suite_run.sh` runs all suites;
+`tooling/bench/ablation_table.py` builds `docs/table.md` with the seed test; `tooling/bench/accept.sh --submission` is the fresh-clone
+certification.
 
-Stock transformer anchor for comparison: `mean_area` 0.7734, clean AUC 0.8605; the organisers'
-no-degradation reference area is 0.8201.
+**The standard that decides anything:** three training seeds per configuration; two configurations are separable only when the gap
+between their seed means exceeds 3·sqrt(s_a²/3 + s_b²/3). With s = 0.0030 that bar is about 0.0074. Single-run gaps below ~0.006 are
+unproven. Every number in a report is read from its `runs/*.json` in the command that writes the report.
 
-Code, config and checkpoint are byte-identical to `3ac262f`, which passed the full fresh-clone
-acceptance run; this commit adds documentation only.
+## What we learned (short form; full record in `docs/`)
+
+- Deriving the attention mask from the zeroed input rows is worth +0.018 on frozen stock weights and +0.035 after retraining.
+- Pooled set encoders beat a retrained masked transformer; the transformer body adds nothing measurable at 27x the parameters.
+- Normalising pt by the surviving sum injects a severity-correlated shift; mean-pt removes 95% of the resulting latent drift.
+- The training-seed spread (0.0030) is the binding noise, not probe refits (0.0004) and not the bench (0.00009). It is a property of the
+  training procedure, not the data size. Repeat seeds, never benches.
+- Twelve times the training data (940k events × 400 candidates) changes the robustness metric by 0.0000 (three seeds each regime).
+- Encoder capacity is not binding (3.8x parameters lands on the reference); the probe uses latent magnitude (normalising the latent costs
+  0.026); whitened consistency collapses the latent; the two-view latent shrink is the MSE term's doing.
+- Checkpoint selection under an unseeded validation corruption was noise-dominated; seed it (`val_degradation_seed`).
+- The generator effectively never removed more than 70% of an event's candidates; a third of that was calibration error in our own
+  families; fixing both did not move the score.
+- Group 3's published numbers came from a different probe and severity grid; on one instrument our recipe leads on every family.
+- FPGA line (HGQ2 + hls4ml): 6-bit weights with ReLU costs nothing beyond the LayerNorm→BatchNorm swap (−0.004); the folded 400-candidate
+  design compiles and is bit-exact; fitting configuration 34,048 multipliers; Vitis HLS could not finish synthesis here (tail quantizers).
+
+## Where things are
+
+`docs/writeup/` per-package sections (A–N, G) · `docs/RULING.md`, `docs/RULING-2.md` the decisions and why · `docs/table.md` every measured
+row · `docs/plots/` the figures and the register of 41 silent-failure classes (`docs/plots/README.md`) · `docs/reports/` the hour-by-hour
+reports · `docs/prompts/` the briefs and the rulings log · `docs/CHECKPOINTS.md` every checkpoint with sha256 and location ·
+`tooling/` the bench, the acceptance script and the GPU slot scheduler.
+
+For an agent picking this up, read `AGENTS.md` first.

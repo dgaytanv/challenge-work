@@ -1,0 +1,100 @@
+{
+  "_note": "Reference corruption fingerprints. map_sha256 is the digest of the dead map at each swept severity and is independent of eval file, model and probe. A row whose fingerprint differs applied a DIFFERENT corruption than its family name claims -- see the ellipse swap of 2026-09-04.",
+  "_severities": [
+    0.2,
+    0.4,
+    0.6,
+    0.8,
+    1.0
+  ],
+  "families": {
+    "rect": {
+      "class": "BenchDegradation",
+      "eta_max": 5.0,
+      "map_sha256": [
+        "710c20c162c1476c65b82613a3227bccf5eddcbe8dae21e9903cbf23ad3478e1",
+        "ca986f3162ba3468201e2f23906ada84edb87e4a57a74f156094e8907246d044",
+        "acf8e1454e3e4de4ae3ea9190c47107dd4a6d1d1b4c9e4541ea09c8bf6fc5aba",
+        "51e8528c14455f62e43d935dd019bdba67e705e0f63652c4db9e52f0337479dd",
+        "2fd30cecabb6a451b0c2ec31f59264e9af2faa50b9ce1a98d54e587d93116e2a"
+      ]
+    },
+    "wedge": {
+      "class": "BenchDegradation",
+      "eta_max": 5.0,
+      "map_sha256": [
+        "b74a86c893001ab968a47a616d216dc668cfcc66d847881c9909f146c1ae9c51",
+        "282a7da2c2ffc5a25a65b10e289734eae5f6681f546659ec58c93a687f28558e",
+        "df3a1077bf3b9733c77bee56261b6d67d880672c88810eb91ab1b654b18f8a55",
+        "4be11d199be5b58c3e41db26e2259bab95a23b509567b38d2b19a7bd9076b13f",
+        "c7e829f7e00a75c8b59494a4dab07dde176b0728acac2c7c318ad667d29d4438"
+      ]
+    },
+    "strip": {
+      "class": "BenchDegradation",
+      "eta_max": 5.0,
+      "map_sha256": [
+        "73d364dc9283b1cc46764586771c44c41fd65e90cddf042bbecd300606725131",
+        "bb54db2bf4eaa7d0b69bffee6987f830442c1e798d3f859fc596811b5a90681c",
+        "7c28cbaf7a917261295f124924ed8f44a7884a0517cc6cdcbccd0be2c74cb37e",
+        "4c3fa54ef3179b32645247ef2d701fbde81439e95bf87f8b23cf3fe6d625f789",
+        "faa7d2b4e762b635ee87f0923bc95e028be8e3363ffd1d9c3dae22feee666cd6"
+      ]
+    },
+    "towers": {
+      "class": "BenchDegradation",
+      "eta_max": 5.0,
+      "map_sha256": [
+        "ad164721e4b903b57f0e05a916ced5aec7d9e5ca71911d697ff2d916946cff6a",
+        "9d08e6e9fa0cd44bef16a2958fe68fcd81c2c228089b932a340c468fd3fe49ec",
+        "cb984fd1b69b4dc6afcdfb4986d445c430a295c968002bd525000dd783b0c4c8",
+        "5e1e5490bd607621f74685636c85d97bcf5f4c078025fcd4a0558570521d9930",
+        "5c9dfa20e4f31df12ed5fc9536677f2c1069a07a9fc3641e85a2446eabb875eb"
+      ]
+    },
+    "cells": {
+      "class": "BenchDegradation",
+      "eta_max": 5.0,
+      "map_sha256": [
+        "142f8835bc5eabfdb8982a1a98a395240fd6d0817ed1b11566053de157510eeb",
+        "43c835a7f7227d0aa73a5ac68524b3d819d53f0498b17795f37404945b2cbd86",
+        "cdbb0027d30c7a515b7c7fa6ece063f20c52e8a59569c628862affa6e1d3cab7",
+        "c640c51b3f4634423d4e2ba7af8ce5efb6ba6fd6dcea9ed559d0223e65b5f8c7",
+        "6fd443c4cfa7eb07b46c63112b046d201bb9f71bad0078527f2231f96d1f8289"
+      ]
+    },
+    "ellipse": {
+      "class": "HeldoutDegradation",
+      "eta_max": null,
+      "map_sha256": [
+        "35cbf5064bfc2a23197940314f4f98b0aa24ff5e8c7a004565c27198d49c5a5b",
+        "3523fa88c2691d3c8ab51a5e7cbdb7fb3bd0800181fa66984b3ceca70a0a9295",
+        "87359264b9a9684aaf3e4058812a25b6f0d1b2903d0d70f20e4567183495c066",
+        "954e682092cd70e0b2870792a4fc8f2b0cfb3576948627867b0c38aa236481fc",
+        "5c9dfa20e4f31df12ed5fc9536677f2c1069a07a9fc3641e85a2446eabb875eb"
+      ]
+    },
+    "annulus": {
+      "class": "HeldoutDegradation",
+      "eta_max": null,
+      "map_sha256": [
+        "e047ebb91f82a26a7803e02a2f264d3ac327b24a7557eac6f060181e94f0c89a",
+        "aab0aa3c644769c592ccb21b7d78d09f49305a40c0d7d913e66cd2cfdc6ed5c6",
+        "1694e6908f50ca67a9396d37377e0e21a8d1c44aa116f4559ae8550b62afd852",
+        "5571dfe3cfd3adab085a9764326b3afcbd91aa25805d9a1b3b00ccc437dba893",
+        "fa25669b2b81b0e0f55bcc674a21a0351cbe22ae55b1a65efa1de19eb1e5dbdb"
+      ]
+    },
+    "diagonal": {
+      "class": "HeldoutDegradation",
+      "eta_max": null,
+      "map_sha256": [
+        "91243b23b95fe90f4ee95606e1a0598ecaad9c3c40cee1f248df48304e0a45d2",
+        "3754a97ef63d82a082d73b2a160c58f30d00a4f0c149de997fc87cc33476c4bd",
+        "f062826d5aff9cb0a1f6c07a59694c81af4285c4c48d8f46b01f5f976fe37f53",
+        "8f38eada5b6010bb60328120f284e874b88c0cf6a22d92c035ea8cae371d61ae",
+        "5c9dfa20e4f31df12ed5fc9536677f2c1069a07a9fc3641e85a2446eabb875eb"
+      ]
+    }
+  }
+}

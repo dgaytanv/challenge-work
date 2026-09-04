@@ -1,0 +1,27 @@
+model_name: robust_tagging
+# SUBMISSION config for a-pma. Training-side keys stripped; what remains is what
+# eval.py reads to rebuild the encoder.
+# Derived from train_config_b_aug_stock.yaml, changing ONLY the readout, so this lands
+# in the ablation table as 'transformer + aug + PMA readout' against B's CLS row.
+# Tag: a-pma.
+
+# Consumed by train.py via cfg.get_trdata_cfg(...)
+data:
+  preproc_type: PFPreProcessor   # PF-candidate inputs -> 14 features after preproc
+  val_split: 0.1
+  pairwise: false
+
+# Consumed by train.py via cfg.hp(...) / cfg.get_hyperparam(...)
+hyperparameters:
+
+
+  # transformer encoder
+  embed_size: 128
+  num_heads: 8
+  num_layers: 4
+  latent_dim: 6
+  readout: pma
+  proj_dim: 12
+  linear_dim: null
+
+  # contrastive (InfoNCE) term
