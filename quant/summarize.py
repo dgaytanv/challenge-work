@@ -59,14 +59,15 @@ def bench_row(tag):
     d = json.load(open(hits[-1]))
     return dict(file=os.path.basename(hits[-1]),
                 mean_area=d.get('mean_area'), mean_area_std=d.get('mean_area_std'),
-                clean_auc=d.get('clean_auc'), clean_auc_std=d.get('clean_auc_std'),
+                clean_auc=d.get('auc_clean_full'), clean_auc_std=d.get('auc_clean_full_std'),
                 eta_max=d.get('eta_max'), train_data=d.get('train_data'),
-                per_family={k: v for k, v in (d.get('area_by_family') or {}).items()})
+                per_family={k: (v.get('area') if isinstance(v, dict) else v)
+                            for k, v in (d.get('families') or {}).items()})
 
 
 def main():
     rows = []
-    for f in sorted(glob.glob(f'{Q}/g[AB]-*.json')):
+    for f in sorted(glob.glob(f'{Q}/g[ABCD]-*.json')):
         d = json.load(open(f))
         tag = d['tag']
         npz = f.replace('.json', '.params.npz')
