@@ -30,8 +30,11 @@ from embedding.preprocs import PFPreProcessorMeanPt
 from embedding.utils.data_utils import load_data
 from keras_port import build_keras_encoder, load_torch_weights, preproc_meanpt_np, survivors_np
 
-CKPT = os.path.join(REPO, 'checkpoints', 'rt_d_pma0_aug_meanpt_encoder_20260903_221125.pth')
-DATA = os.path.expanduser('~/hack-data/C9_robust_tagging/eval/robust_tagging_eval_small.pt')
+CKPT = os.environ.get('G_REF_CKPT',
+                      os.path.join(REPO, 'checkpoints', 'rt_d_pma0_aug_meanpt_encoder_20260903_221125.pth'))
+DATA = os.environ.get('G_EVAL_DATA',
+                      os.path.expanduser('~/hack-data/C9_robust_tagging/eval/robust_tagging_eval_small.pt'))
+TAG = os.environ.get('G_TAG', 'PF')
 N_EVENTS = 2000
 TOL = 1e-4
 
@@ -123,9 +126,9 @@ def main():
         print(f'[{name:14s}] frozen-probe AUC torch={a_t:.6f} keras={a_k:.6f} '
               f'delta={a_k-a_t:+.2e} (PMA probe floor 3.8e-3)')
 
-    out = dict(ckpt=os.path.basename(CKPT), n_events=int(feats_all.shape[0]),
+    out = dict(tag=TAG, ckpt=os.path.basename(CKPT), data=os.path.basename(DATA), n_events=int(feats_all.shape[0]),
                tol=TOL, params=int(n_par), passed=bool(ok), views=results)
-    dst = os.path.expanduser('~/hackathon-shared/quant/g1_port_test.json')
+    dst = os.path.expanduser('~/hackathon-shared/quant/g1_port_test_%s.json' % TAG)
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     with open(dst, 'w') as f:
         json.dump(out, f, indent=2)

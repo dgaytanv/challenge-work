@@ -526,3 +526,162 @@ class PMAEncoder(nn.Module):
 # class default is 0 too: a missing key cannot silently build a different architecture.
 AttentionTransformerEncoder = TransformerEncoder
 TransformerEncoder = PMAEncoder
+
+
+# ---------------------------------------------------------------------------
+# WP-G: bit-exact torch emulation of the HGQ2 quantized encoder.
+#
+# Purpose: let `bench_eval.py --encoder_class QuantizedPMAEncoder` and E's
+# `accept.sh` measure the quantized model on the real ruler without either of
+# them learning anything about Keras. The class takes the same constructor
+# signature and forward contract as TransformerEncoder, and everything it needs
+# is in its state_dict, so `load_state_dict(ckpt["encoder"])` is all that runs.
+#
+# It emulates HGQ2's fixed-point arithmetic rather than approximating it. The
+# semantics are taken from `quantizers/fixed_point/_fixed_point_ops.py`
+# (FixedPointQuantizer.forward) and `hgq/layers/*`:
+#
+#   inference:  if overflow != WRAP:  x = saturate(x, k, i, f)
+#               x = round_fn(x * 2^f) / 2^f
+#               if overflow == WRAP:  x = saturate(x, k, i, f)
+#   saturate    WRAP    : (x + k*2^(i+k-1)) mod 2^(i+k) - k*2^(i+k-1)
+#               SAT     : clip(x, -k*2^i,          2^i - 2^-f)
+#               SAT_SYM : clip(x, -k*(2^i - 2^-f), 2^i - 2^-f)
+#   round       RND     : floor(x + 0.5)          (ties toward +inf)
+#               RND_CONV: round-half-to-even
+#
+# WEIGHTS ARE PRE-QUANTIZED AT EXPORT. Weight quantization is data-independent,
+# so applying kq/bq once at export is exact and the runtime only has to apply
+# the data-lane (activation) quantizers. That is why the state_dict holds plain
+# kernels plus (k, i, f) triples for the activations only.
+# ---------------------------------------------------------------------------
+
+_Q_MASK_BIG = 64.0     # quant/hgq_model.py MASK_BIG; see that file for why 64
+_Q_KEPS = 1e-7         # keras backend.epsilon(), used by QSoftmax's 1/(x+eps) table
+
+
+def _fixed_q(x: torch.Tensor, k, i, f, round_mode: str, overflow: str) -> torch.Tensor:
+    """One HGQ2 fixed-point quantizer, inference semantics, bit-exact."""
+    def saturate(t):
+        if overflow == 'WRAP':
+            bk = i + k
+            bias = k * torch.pow(2.0, bk - 1)
+            return torch.remainder(t + bias, torch.pow(2.0, bk)) - bias
+        eps = torch.pow(2.0, -f)
+        hi = torch.pow(2.0, i) - eps
+        lo = -(hi if overflow == 'SAT_SYM' else torch.pow(2.0, i)) * k
+        return torch.minimum(torch.maximum(t, lo), hi)
+
+    if overflow != 'WRAP':
+        x = saturate(x)
+    scale = torch.pow(2.0, f)
+    xs = x * scale
+    xq = torch.floor(xs + 0.5) if round_mode == 'RND' else torch.round(xs)
+    x = xq / scale
+    if overflow == 'WRAP':
+        x = saturate(x)
+    return x
+
+
+class QuantizedPMAEncoder(nn.Module):
+    """Torch emulation of the HGQ2-quantized, restructured PMA encoder.
+
+    Same constructor signature and forward contract as TransformerEncoder. The
+    architecture is the restructured one (see quant/hgq_model.py):
+      * R1 - the constant seed queries are fused into the key projection, so
+        q_proj and k_proj are one Dense 128->32 named `score`;
+      * R2 - the redundant h*keep multiply is gone;
+      * the mask is an additive -MASK_BIG bias on the scores before a plain
+        softmax, because hls4ml 1.3.0 cannot convert a masked softmax;
+      * LayerNorm is replaced by a folded BatchNorm affine (scale, offset).
+    """
+
+    _DENSES = (('phi_0', 14, 128), ('phi_1', 128, 128), ('score', 128, 32),
+               ('v', 128, 128), ('out_proj', 128, 128), ('bottleneck', 512, 6))
+    _NORMS = (('nrm0', 128), ('nrm1', 128), ('norm_pooled', 512))
+    _LUTS = ('phi_act0', 'phi_act1')
+
+    def __init__(self, num_features: int, embed_size: int, latent_dim: int,
+                 num_heads: int = 8, num_layers: int = 0,
+                 linear_dim=None, num_tokens=None, pairwise: bool = False,
+                 num_seeds: int = 4, act: str = 'gelu'):
+        super().__init__()
+        self.pairwise = pairwise
+        self.num_heads, self.num_seeds = num_heads, num_seeds
+        self.head_dim = embed_size // num_heads
+        self.embed_size, self.latent_dim = embed_size, latent_dim
+        self.act = act
+
+        for name, nin, nout in self._DENSES:
+            self.register_buffer(f'w_{name}', torch.zeros(nin, nout))
+            self.register_buffer(f'b_{name}', torch.zeros(nout))
+        for name, c in self._NORMS:
+            self.register_buffer(f'ns_{name}', torch.ones(c))
+            self.register_buffer(f'no_{name}', torch.zeros(c))
+
+        # data-lane quantizer triples; shapes match the keras iq/oq broadcast shapes
+        def q(name, shape):
+            for t in 'kif':
+                self.register_buffer(f'q_{name}_{t}', torch.zeros(*shape))
+
+        for name, nin, _ in self._DENSES:
+            q(f'{name}_iq', (1, 1, nin) if name != 'bottleneck' else (1, nin))
+        for name, c in self._NORMS:
+            q(f'{name}_iq', (1, 1, c) if name != 'norm_pooled' else (1, c))
+        for name in self._LUTS:
+            q(f'{name}_iq', (1, 1, embed_size))
+            q(f'{name}_oq', (1, 1, 1))
+        q('add_iq0', (1, 1, num_heads * num_seeds))
+        q('add_iq1', (1, 1, num_heads * num_seeds))
+        q('exp_iq', (1, 1, 1)); q('exp_oq', (1, 1, 1))
+        q('inv_iq', (1, 1, 1)); q('inv_oq', (1, 1, 1))
+        q('comb_iq0', (1, 1, num_heads, num_seeds))
+        q('comb_iq1', (1, 1, num_heads, self.head_dim))
+
+    # -- quantizer application -------------------------------------------------
+    def _q(self, x, name, round_mode='RND', overflow='WRAP'):
+        return _fixed_q(x, getattr(self, f'q_{name}_k'), getattr(self, f'q_{name}_i'),
+                        getattr(self, f'q_{name}_f'), round_mode, overflow)
+
+    def _dense(self, x, name):
+        x = self._q(x, f'{name}_iq')
+        return x @ getattr(self, f'w_{name}') + getattr(self, f'b_{name}')
+
+    def _norm(self, x, name):
+        x = self._q(x, f'{name}_iq')
+        return x * getattr(self, f'ns_{name}') + getattr(self, f'no_{name}')
+
+    def _lut(self, x, name):
+        x = self._q(x, f'{name}_iq')
+        y = F.gelu(x) if self.act == 'gelu' else F.relu(x)
+        return self._q(y, f'{name}_oq', 'RND_CONV', 'SAT')
+
+    def _softmax(self, s):
+        """QSoftmax(axis=1, stable=True): max-subtract, exp LUT, reciprocal LUT."""
+        inp = s.max(dim=1, keepdim=True).values - s
+        e = torch.exp(-self._q(inp, 'exp_iq'))
+        e = self._q(e, 'exp_oq', 'RND_CONV', 'SAT')
+        sums = e.sum(dim=1, keepdim=True)
+        inv = 1.0 / (self._q(sums, 'inv_iq') + _Q_KEPS)
+        inv = self._q(inv, 'inv_oq', 'RND_CONV', 'SAT')
+        return e * inv
+
+    def forward(self, x, pairwise_feats=None, mask=None):
+        B, N, _ = x.shape
+        H, S, D = self.num_heads, self.num_seeds, self.head_dim
+        keep = _survivors(x, mask)                                   # [B, N] bool
+        madd = (keep.to(x.dtype) - 1.0).unsqueeze(-1) * _Q_MASK_BIG  # [B, N, 1]
+        madd = madd.expand(B, N, H * S)
+
+        h = self._lut(self._norm(self._dense(x, 'phi_0'), 'nrm0'), 'phi_act0')
+        h = self._lut(self._norm(self._dense(h, 'phi_1'), 'nrm1'), 'phi_act1')
+
+        s = self._q(self._dense(h, 'score'), 'add_iq0') + self._q(madd, 'add_iq1')
+        attn = self._softmax(s)
+        v = self._dense(h, 'v')
+
+        a4 = self._q(attn.reshape(B, N, H, S), 'comb_iq0')
+        v4 = self._q(v.reshape(B, N, H, D), 'comb_iq1')
+        pooled = torch.einsum('bnhs,bnhd->bshd', a4, v4).reshape(B, S, H * D)
+        pooled = self._dense(pooled, 'out_proj').reshape(B, S * self.embed_size)
+        return self._dense(self._norm(pooled, 'norm_pooled'), 'bottleneck')
