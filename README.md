@@ -90,6 +90,17 @@ unproven. Every number in a report is read from its `runs/*.json` in the command
 - FPGA line (HGQ2 + hls4ml): 6-bit weights with ReLU costs nothing beyond the LayerNorm→BatchNorm swap (−0.004); the folded 400-candidate
   design compiles and is bit-exact; fitting configuration 34,048 multipliers; Vitis HLS could not finish synthesis here (tail quantizers).
 
+## Figures
+
+- `docs/plots/architecture_latest.png` — the champion, end to end.
+- `docs/plots/curves_latest.png` — AUC vs severity per corruption family, every model, on our development bench.
+- `docs/plots/tsne_latents_latest.png` — t-SNE of the 6-d latent, 6,000 eval events, winner vs organisers' stock model, clean and under cell dropout at severities 0.4 and 0.8 (one joint embedding per row, so movement between panels is real).
+- `docs/plots/tsne_drift_latest.png` — where each event's latent moves under cell dropout at severity 0.8 (descriptive: neither coherence nor the along-probe fraction explains the ranking).
+- `docs/plots/seeds_latest.png` — every campaign-2 configuration's seeds against the champion's seed band: the ruling figure.
+- `docs/plots/colleague_latest.png`, `l1t_colleague_latest.png`, `colleague_group3_latest.png` — Group 3's corruption suite: our models; the like-for-like comparison against their checkpoints; the preserved PF-file comparison.
+- `docs/plots/heldout_latest.png`, `official_latest.png`, `altdata_latest.png`, `quant_curve_latest.png`, `augmentation_examples_latest.png` — held-out shapes, the organisers' grader, the L1T acceptance, accuracy vs bit width, and what the training augmentation does to an event.
+- `docs/plots/README.md` — the inspection record of every figure and the register of 41 silent-failure classes.
+
 ## Where things are
 
 `docs/writeup/` per-package sections (A–N, G) · `docs/RULING.md`, `docs/RULING-2.md` the decisions and why · `docs/table.md` every measured
