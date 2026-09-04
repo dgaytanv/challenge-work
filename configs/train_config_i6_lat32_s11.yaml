@@ -1,0 +1,30 @@
+# WP-D: PMAEncoder(num_layers=0) + PFPreProcessorMeanPt - the union of the two best directions.
+# WP-I arm I6 (lat32): champion config with ONE change, {'latent_dim': 32}; seed 11.
+# Planner exception to the convergence freeze; candidate only if it benches by 22:45.
+# Bench with --encoder_class PMAEncoder and --train_cfg THIS file (preproc_type is a data: key).
+model_name: rt_i6_lat32_s11
+data:
+  preproc_type: PFPreProcessorMeanPt
+  val_split: 0.1
+  pairwise: false
+hyperparameters:
+  num_epochs: 25
+  early_stopping_patience: 5
+  batch_size: 256
+  mixed_prec: true
+  lr: 0.001
+  lr_min: 0.0
+  lr_warmup: 0.05
+  embed_size: 128
+  num_heads: 8
+  num_layers: 0
+  latent_dim: 32
+  proj_dim: 12
+  linear_dim: null
+  contrast_temp: 0.07
+  contrastive_weight: 0.05
+  contrastive_max: null
+  contrastive_warmup: 0.05
+  encoder_class: PMAEncoder
+  use_degradation: true
+  seed: 11

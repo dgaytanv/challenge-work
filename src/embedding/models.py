@@ -519,3 +519,26 @@ class PMAEncoder(nn.Module):
             h = h * keep.unsqueeze(-1).to(h.dtype)
         pooled = self.pma(h, keep)
         return self.bottleneck(self.norm_pooled(pooled))
+
+
+class PMAEncoder8(PMAEncoder):
+    """WP-I arm I4: the PMA readout with 8 seed queries instead of 4.
+
+    A distinct CLASS rather than a `num_seeds` kwarg, because neither of the two things
+    that must rebuild this encoder will ever pass one. `eval.py:build_preproc_and_encoder`
+    and `bench/bench_eval.py` both construct the encoder from the grader's fixed signature
+    (num_features, embed_size, latent_dim, num_heads, num_layers, linear_dim, num_tokens,
+    pairwise) and pass no keyword arguments. `train.py` DOES read an `encoder_kwargs`
+    config key, so going that route would train an 8-seed model that nothing downstream
+    could rebuild. That mismatch would at least fail loudly here (`pma.seeds` is [1,8,E]
+    against [1,4,E], so `load_state_dict` raises) but a class whose default IS the final
+    choice removes the failure mode rather than relying on it being loud.
+
+    Selected with `encoder_class: PMAEncoder8` in the train config and
+    `--encoder_class PMAEncoder8` at the bench. If this arm is ever promoted the shipped
+    branch aliases `TransformerEncoder = PMAEncoder8`, and the grader gets 8 seeds from
+    the signature alone with no keyword argument anywhere.
+    """
+
+    def __init__(self, *args, num_seeds: int = 8, **kwargs):
+        super().__init__(*args, num_seeds=num_seeds, **kwargs)
