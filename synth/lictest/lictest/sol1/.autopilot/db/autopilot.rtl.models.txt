@@ -1,3 +1,0 @@
-topf_mul_16s_16s_26_1_1
-topf_mac_muladd_16s_16s_26ns_26_4_1
-topf

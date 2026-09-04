@@ -11,3 +11,9 @@ logs/
 checkpoints/*
 !checkpoints/rt_d_pma0_aug_meanpt_encoder_20260903_221125.pth
 quant/ckpt/
+
+# WP-G campaign 2: HLS/Vivado build products. Multi-GB and regenerable from
+# quant/g6_build.py + synth/run_synth.sh; the LOGS and REPORTS are kept.
+synth/*/
+!synth/
+synth/**/*.dat
