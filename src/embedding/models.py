@@ -610,7 +610,13 @@ class QuantizedPMAEncoder(nn.Module):
         self.num_heads, self.num_seeds = num_heads, num_seeds
         self.head_dim = embed_size // num_heads
         self.embed_size, self.latent_dim = embed_size, latent_dim
-        self.act = act
+        # The activation must travel IN the state_dict, not as a constructor kwarg.
+        # bench_eval.py / eval.py build the encoder from the signature alone and pass no
+        # kwargs, so a ReLU-trained checkpoint loaded into a GELU-default class scores
+        # like noise (measured: mean_area 0.5226, clean AUC 0.6250, versus 0.8079 once the
+        # activation is carried in the buffer). Same silent-failure class as the
+        # preprocessor mismatch: two objects sharing a schema.
+        self.register_buffer('act_relu', torch.tensor(1.0 if act == 'relu' else 0.0))
 
         for name, nin, nout in self._DENSES:
             self.register_buffer(f'w_{name}', torch.zeros(nin, nout))
@@ -653,7 +659,7 @@ class QuantizedPMAEncoder(nn.Module):
 
     def _lut(self, x, name):
         x = self._q(x, f'{name}_iq')
-        y = F.gelu(x) if self.act == 'gelu' else F.relu(x)
+        y = F.relu(x) if bool(self.act_relu.item()) else F.gelu(x)
         return self._q(y, f'{name}_oq', 'RND_CONV', 'SAT')
 
     def _softmax(self, s):

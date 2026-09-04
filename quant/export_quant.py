@@ -60,7 +60,7 @@ def main():
         # No quantizers to extract: kernels and the BatchNorm affine are the whole model.
         # The (k, i, f) buffers still have to exist for load_state_dict(strict=True), so
         # they are written as zeros and FloatBNPMAEncoder never reads them.
-        sd = {}
+        sd = {'act_relu': torch.tensor(1.0 if args.act == 'relu' else 0.0)}
         for name in DENSES:
             L = m.get_layer(name)
             sd[f'w_{name}'] = torch.tensor(npy(L.kernel))
@@ -88,7 +88,7 @@ def main():
         print(f'[export] wrote FLOAT {args.out}; FloatBNPMAEncoder strict load OK')
         return
 
-    sd = {}
+    sd = {'act_relu': torch.tensor(1.0 if args.act == 'relu' else 0.0)}
     for name in DENSES:
         L = m.get_layer(name)
         sd[f'w_{name}'] = torch.tensor(npy(L.qkernel))      # weight quantizer applied

@@ -121,12 +121,22 @@ def fold_affine_into_dense_in(W, b, scale, shift):
 # Model
 # ======================================================================================
 def build_model(norm='bn', act='gelu', quantized=False, n_tokens=400,
-                beta0=1e-5, name=None):
+                beta0=1e-5, max_bits=None, name=None):
     """(x_feat [N,14], mask_add [N,32]) -> latent [6].
 
     norm      : 'bn' (QBatchNormalization, hardware path) or 'ln' (float LayerNorm control)
     act       : 'gelu' or 'relu'
     quantized : HGQ2 layers with EBOPs regularisation, or the plain float twin
+    max_bits  : hard cap on the learned bit widths (weights: total bits; data lanes:
+                fractional bits). This is the axis the accuracy-versus-bits curve is swept
+                on, because `beta0` turned out to be unusable: EBOPs came out IDENTICAL to
+                7 significant figures for beta0 = 0, 1e-6, 1e-5, 1e-4 and 1e-3. Two reasons
+                compound. HGQ2's default quantizer configs already carry MonoL1(1e-8)
+                regularisers on the bit-width variables, which push bits down on their own;
+                and **Adam is scale-invariant**, so once every term pushing on a bit width
+                has the same sign, the step size is set by the learning rate rather than by
+                the loss magnitude and multiplying the resource term by 1000 changes
+                nothing. Capping the width directly is both interpretable and effective.
     n_tokens  : MUST be static. `QDense.build` computes its parallelization factor from
                 `prod(input_shape[1:-1])`, and hls4ml's einsum/reshape handlers assert
                 fully-known shapes. Train at 200 (training events), evaluate at 400.
@@ -207,9 +217,23 @@ def build_model(norm='bn', act='gelu', quantized=False, n_tokens=400,
     # Datalane bitwidths must be per-CHANNEL only: the token axis is 200 in training and
     # 400 at eval, so a per-token bitwidth would neither transfer nor mean anything in
     # hardware (one datapath processes every token). homogeneous_axis=(0,1)=(batch,token).
-    with QuantizerConfigScope(q_type='kif', place='datalane', homogeneous_axis=(0, 1)), \
-         QuantizerConfigScope(q_type='kbi', place='datalane', homogeneous_axis=(0, 1)), \
-         LayerConfigScope(beta0=beta0, enable_ebops=True):
+    from contextlib import ExitStack
+
+    from hgq.constraints import MinMax
+    with ExitStack() as st:
+        st.enter_context(QuantizerConfigScope(q_type='kif', place='datalane', homogeneous_axis=(0, 1)))
+        st.enter_context(QuantizerConfigScope(q_type='kbi', place='datalane', homogeneous_axis=(0, 1)))
+        if max_bits is not None:
+            # weights/biases/tables are KBI: cap total bits b. data lanes are KIF: cap the
+            # fractional bits f (the integer part i is set by the data range and must stay
+            # free, or the score path saturates - see MASK_BIG in the module docstring).
+            st.enter_context(QuantizerConfigScope(
+                q_type='kbi', place=('weight', 'bias', 'table'),
+                b0=min(8, max_bits), bc=MinMax(0, max_bits)))
+            st.enter_context(QuantizerConfigScope(
+                q_type='kif', place='datalane', f0=min(6, max_bits),
+                fc=MinMax(-24, max_bits), homogeneous_axis=(0, 1)))
+        st.enter_context(LayerConfigScope(beta0=beta0, enable_ebops=True))
         return _build()
 
 
