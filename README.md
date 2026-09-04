@@ -5,6 +5,9 @@ overnight campaigns. Everything a teammate needs to reproduce, re-verify or cont
 
 ## What we submit
 
+![Champion architecture](docs/plots/architecture_latest.png)
+
+
 **Model:** an attention-pooled set encoder (`PMAEncoder`, `num_layers: 0`): a per-candidate MLP (14 → 128 → 128, LayerNorm, GELU),
 pooling by multi-head attention over four learned seed queries, LayerNorm, a linear head to a 6-d latent. 89,606 parameters.
 **Preprocessor:** `PFPreProcessorMeanPt` (each candidate's pt normalised by the mean surviving pt instead of the sum).
