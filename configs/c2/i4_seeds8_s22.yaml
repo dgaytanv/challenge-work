@@ -1,13 +1,15 @@
-# WP-D: PMAEncoder(num_layers=0) + PFPreProcessorMeanPt - the union of the two best directions.
-# WP-I arm I3 (embed256): champion config with ONE change, {'embed_size': 256}; seed 33.
+# CAMPAIGN 2 CHAMPION (reference). Copied from train_config_d_pma0_aug_meanpt.yaml.
+# WP-I arm I4 (seeds8): champion config with ONE change, {'encoder_class': 'PMAEncoder8'}; seed 22.
+# Every arm starts from a COPY of this and changes ONE thing.
 # Planner exception to the convergence freeze; candidate only if it benches by 22:45.
 # Bench with --encoder_class PMAEncoder and --train_cfg THIS file (preproc_type is a data: key).
-model_name: rt_i3_embed256_s33
+model_name: rt_i4_seeds8_s22
 data:
   preproc_type: PFPreProcessorMeanPt
   val_split: 0.1
   pairwise: false
 hyperparameters:
+  seed: 22
   num_epochs: 25
   early_stopping_patience: 5
   batch_size: 256
@@ -15,7 +17,7 @@ hyperparameters:
   lr: 0.001
   lr_min: 0.0
   lr_warmup: 0.05
-  embed_size: 256
+  embed_size: 128
   num_heads: 8
   num_layers: 0
   latent_dim: 6
@@ -25,6 +27,5 @@ hyperparameters:
   contrastive_weight: 0.05
   contrastive_max: null
   contrastive_warmup: 0.05
-  encoder_class: PMAEncoder
+  encoder_class: PMAEncoder8
   use_degradation: true
-  seed: 33

@@ -494,6 +494,7 @@ class PMAEncoder(nn.Module):
             num_tokens: Union[int, None] = None,
             pairwise: bool = False,
             num_seeds: int = 4,
+            dim_feedforward: int = 2048,
         ):
         super().__init__()
         self.pairwise = pairwise
@@ -502,6 +503,7 @@ class PMAEncoder(nn.Module):
             TransformerEncoderBlock(
                 embed_size,
                 num_heads,
+                dim_feedforward=dim_feedforward,
                 linear_dim=linear_dim,
                 num_tokens=num_tokens if num_tokens is not None else None,
                 pairwise=False,
@@ -542,3 +544,29 @@ class PMAEncoder8(PMAEncoder):
 
     def __init__(self, *args, num_seeds: int = 8, **kwargs):
         super().__init__(*args, num_seeds=num_seeds, **kwargs)
+
+
+class PMAEncoderFF256(PMAEncoder):
+    """WP-I arm I1': a transformer block whose feed-forward width is 256, not 2048.
+
+    Why this arm exists. `TransformerEncoderBlock` defaults `dim_feedforward` to 2048 -- 16x
+    the 128-wide embedding -- and `PMAEncoder` never passed it, so ONE block cost 593k
+    parameters and the capacity ladder jumped straight from 1.15x the champion to 7.62x with
+    nothing in between. Campaign 1 measured a-pma at 27x buying +0.0022 on the bench and a tie
+    on the official grader, so the open question is how LITTLE extra capacity buys that, and
+    the unmeasured region is exactly the one the default skipped. At `dim_feedforward=256`
+    one block is 222,254 parameters, 2.48x the champion.
+
+    A class rather than a config key, per the campaign rule (planner, 03:38): any encoder
+    option must be a class the grader's fixed signature constructs with the option as its
+    DEFAULT, selected by `encoder_class`. `bench_eval.py` and `eval.py` pass no kwargs.
+
+    Note for the one-change audit: at `num_layers: 0` this class is bit-identical to
+    `PMAEncoder`, because `dim_feedforward` is only read when a block is built. So the arm's
+    two config lines (`num_layers: 1` and `encoder_class: PMAEncoderFF256`) are ONE
+    behavioural change -- "add a single transformer block of feed-forward width 256" -- and
+    neither line alone expresses it.
+    """
+
+    def __init__(self, *args, dim_feedforward: int = 256, **kwargs):
+        super().__init__(*args, dim_feedforward=dim_feedforward, **kwargs)
