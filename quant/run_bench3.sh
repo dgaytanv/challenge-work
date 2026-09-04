@@ -7,7 +7,7 @@ EVAL=$HOME/hack-data/C9_robust_tagging/eval/robust_tagging_eval_small_l1t.pt
 TRAIN=$HOME/hack-data/C9_robust_tagging/train/robust_tagging_train_data_small_l1t.pt
 Q=$HOME/hackathon-shared/quant
 mkdir -p quant/ckpt
-for spec in "gD-bits3-l1t gelu" "gD-bits4-l1t gelu" "gD-bits6-l1t gelu" "gD-bits10-l1t gelu" "gD-relu-l1t relu"; do
+for spec in "gD-bits6-l1t gelu" "gD-bits10-l1t gelu" "gD-relu-l1t relu"; do
   set -- $spec; TAG=$1; ACT=$2
   [ -f "$Q/$TAG.params.npz" ] || { echo "skip $TAG (no params)"; continue; }
   echo "=== $TAG ($ACT) ==="
