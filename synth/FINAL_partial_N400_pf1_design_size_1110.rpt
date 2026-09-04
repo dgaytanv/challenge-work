@@ -1,0 +1,194 @@
+================================================================
+== Design Size Report
+================================================================
+
+* C-Synthesis has not completed!
+
+* Total Instructions per Compilation Phase
++---------------+--------------+----------------------------------------------------------------------------------+
+| Phase         | Instructions | Description                                                                      |
++---------------+--------------+----------------------------------------------------------------------------------+
+| Compile/Link  | 1,234,610 *  | After all functions are compiled and linked into a single design                 |
+| Unroll/Inline | pending      | After user unroll and inline pragmas are applied                                 |
+| Array/Struct  |              | After user array partition and struct aggregate/disaggregate pragmas are applied |
+| Performance   |              | After transformations are applied to meet performance pragma targets             |
+| HW Transforms |              | After hardware transfomations                                                    |
++---------------+--------------+----------------------------------------------------------------------------------+
+    * - Exceeded design size warning message threshold
+
+* Instructions per Function for each Compilation Phase
++-----------------------------------------------+--------------------------+---------------------+
+| Function                                      | Location                 | Compile/Link        |
++-----------------------------------------------+--------------------------+---------------------+
+| + pma0                                        | pma0.cpp:7               | 1,234,610 *         |
+|    phi_0_iq<ap_fixed<15, 8, AP_...            | nnet_code_gen.h:27       |   1,908             |
+|  + pointwise_conv_1d_cl<ap_fixe...            | nnet_conv1d.h:52         |  29,888             |
+|   + conv                                      | nnet_conv1d.h:72         |  29,885             |
+|    + conv_1d_latency_cl<ap_fixed<...          | nnet_conv1d_latency.h:11 |  29,883             |
+|       fill_buffer                             | nnet_code_gen.h:53       |  29,201             |
+|       product                                 | nnet_mult.h:70           |     141             |
+|       cast<ap_fixed<14, 8, AP_TRN,...         | nnet_mult.h:110          |      60             |
+|    nrm0_iq<ap_fixed<14, 7, AP_T...            | nnet_code_gen.h:1662     |  19,933             |
+|  + normalize<ap_fixed<13, 7, AP...            | nnet_batchnorm.h:31      |     429             |
+|     product                                   | nnet_mult.h:70           |     141             |
+|    phi_act0_iq<ap_fixed<15, 8, ...            | nnet_code_gen.h:1801     |  19,969             |
+|  + unary_lut<ap_fixed<14, 8, AP...            | nnet_activation.h:479    |     116             |
+|     get_index_unary_lut<16384, a...           | nnet_activation.h:472    |      42             |
+|  + pointwise_conv_1d_cl<ap_ufix...            | nnet_conv1d.h:52         | 257,888             |
+|   + conv                                      | nnet_conv1d.h:72         | 257,885             |
+|    + conv_1d_latency_cl<ap_ufixed...          | nnet_conv1d_latency.h:11 | 257,883             |
+|       fill_buffer                             | nnet_code_gen.h:1941     | 257,201             |
+|       product                                 | nnet_mult.h:70           |     141             |
+|       cast<ap_ufixed<6, 2, AP_RND,...         | nnet_mult.h:110          |      60             |
+|    nrm1_iq<ap_fixed<13, 6, AP_T...            | nnet_code_gen.h:3550     |  19,977             |
+|  + normalize<ap_fixed<12, 6, AP...            | nnet_batchnorm.h:31      |     429             |
+|     product                                   | nnet_mult.h:70           |     141             |
+|    phi_act1_iq<ap_fixed<14, 7, ...            | nnet_code_gen.h:3689     |  19,977             |
+|  + unary_lut<ap_fixed<13, 7, AP...            | nnet_activation.h:479    |     116             |
+|     get_index_unary_lut<8192, ap...           | nnet_activation.h:472    |      42             |
+|    score_iq<ap_ufixed<6, 2, AP_...            | nnet_code_gen.h:3828     |  15,887             |
+|  + pointwise_conv_1d_cl<ap_ufix...            | nnet_conv1d.h:52         | 257,888             |
+|   + conv                                      | nnet_conv1d.h:72         | 257,885             |
+|    + conv_1d_latency_cl<ap_ufixed...          | nnet_conv1d_latency.h:11 | 257,883             |
+|       fill_buffer                             | nnet_code_gen.h:3968     | 257,201             |
+|       product                                 | nnet_mult.h:70           |     141             |
+|       cast<ap_ufixed<8, 2, AP_TRN,...         | nnet_mult.h:110          |      60             |
+|    quantizer<ap_fixed<13, 6, AP...            | nnet_code_gen.h:5577     |   4,989             |
+|    add<ap_fixed<12, 6, AP_TRN, ...            | nnet_merge.h:38          |     196             |
+|  + softmax_multidim<ap_fixed<15...            | nnet_activation.h:400    | 107,969             |
+|   + softmax<ap_fixed<15, 9, AP_T...           | nnet_activation.h:381    | 107,897             |
+|    + softmax_stable<ap_fixed<15, ...          | nnet_activation.h:220    | 107,895             |
+|     + init_exp_table<ap_ufixed<13,...         | nnet_activation.h:149    |     997             |
+|        softmax_real_val_from_idx<ap...        | nnet_activation.h:133    |     227             |
+|        exp_fcn_float                          | nnet_activation.h:131    |       4             |
+|     + init_invert_table<ap_ufixed<...         | nnet_activation.h:165    |     988             |
+|        softmax_real_val_from_idx<ap...        | nnet_activation.h:133    |     227             |
+|     + reduce<ap_fixed<15, 9, AP_TR...         | nnet_common.h:37         |  11,771             |
+|      + reduce<ap_fixed<15, 9, AP_TR...        | nnet_common.h:37         |   7,523             |
+|       + reduce<ap_fixed<15, 9, AP_TR...       | nnet_common.h:37         |   7,494 (2 calls)   |
+|        + reduce<ap_fixed<15, 9, AP_TR...      | nnet_common.h:37         |   7,436 (4 calls)   |
+|         + reduce<ap_fixed<15, 9, AP_TR...     | nnet_common.h:37         |   7,320 (8 calls)   |
+|          + reduce<ap_fixed<15, 9, AP_TR...    | nnet_common.h:37         |   7,088 (16 calls)  |
+|           + reduce<ap_fixed<15, 9, AP_TR...   | nnet_common.h:37         |   6,624 (32 calls)  |
+|            + reduce<ap_fixed<15, 9, AP_TR...  | nnet_common.h:37         |   5,696 (64 calls)  |
+|             + reduce<ap_fixed<15, 9, AP_TR... | nnet_common.h:37         |   3,840 (128 calls) |
+|                operator()                     | nnet_common.h:66         |   2,560 (128 calls) |
+|               operator()                      | nnet_common.h:66         |   1,280 (64 calls)  |
+|              operator()                       | nnet_common.h:66         |     640 (32 calls)  |
+|             operator()                        | nnet_common.h:66         |     320 (16 calls)  |
+|            operator()                         | nnet_common.h:66         |     160 (8 calls)   |
+|           operator()                          | nnet_common.h:66         |      80 (4 calls)   |
+|          operator()                           | nnet_common.h:66         |      40 (2 calls)   |
+|         operator()                            | nnet_common.h:66         |      20             |
+|      + reduce<ap_fixed<15, 9, AP_TR...        | nnet_common.h:37         |   4,219             |
+|       + reduce<ap_fixed<15, 9, AP_TR...       | nnet_common.h:37         |   3,747             |
+|        + reduce<ap_fixed<15, 9, AP_TR...      | nnet_common.h:37         |   3,718 (2 calls)   |
+|         + reduce<ap_fixed<15, 9, AP_TR...     | nnet_common.h:37         |   3,660 (4 calls)   |
+|          + reduce<ap_fixed<15, 9, AP_TR...    | nnet_common.h:37         |   3,544 (8 calls)   |
+|           + reduce<ap_fixed<15, 9, AP_TR...   | nnet_common.h:37         |   3,312 (16 calls)  |
+|            + reduce<ap_fixed<15, 9, AP_TR...  | nnet_common.h:37         |   2,848 (32 calls)  |
+|             + reduce<ap_fixed<15, 9, AP_TR... | nnet_common.h:37         |   1,920 (64 calls)  |
+|                operator()                     | nnet_common.h:66         |   1,280 (64 calls)  |
+|               operator()                      | nnet_common.h:66         |     640 (32 calls)  |
+|              operator()                       | nnet_common.h:66         |     320 (16 calls)  |
+|             operator()                        | nnet_common.h:66         |     160 (8 calls)   |
+|            operator()                         | nnet_common.h:66         |      80 (4 calls)   |
+|           operator()                          | nnet_common.h:66         |      40 (2 calls)   |
+|          operator()                           | nnet_common.h:66         |      20             |
+|       + reduce<ap_fixed<15, 9, AP_TR...       | nnet_common.h:37         |     443             |
+|        + reduce<ap_fixed<15, 9, AP_TR...      | nnet_common.h:37         |     414 (2 calls)   |
+|         + reduce<ap_fixed<15, 9, AP_TR...     | nnet_common.h:37         |     356 (4 calls)   |
+|          + reduce<ap_fixed<15, 9, AP_TR...    | nnet_common.h:37         |     240 (8 calls)   |
+|             operator()                        | nnet_common.h:66         |     160 (8 calls)   |
+|            operator()                         | nnet_common.h:66         |      80 (4 calls)   |
+|           operator()                          | nnet_common.h:66         |      40 (2 calls)   |
+|          operator()                           | nnet_common.h:66         |      20             |
+|         operator()                            | nnet_common.h:66         |      20             |
+|        operator()                             | nnet_common.h:66         |      20             |
+|       softmax_idx_from_real_val<ap...         | nnet_activation.h:141    |      97             |
+|     + reduce<ap_ufixed<30, 8, AP_T...         | nnet_common.h:37         |  93,167             |
+|      + reduce<ap_ufixed<30, 8, AP_T...        | nnet_common.h:37         |  59,543             |
+|       + reduce<ap_ufixed<30, 8, AP_T...       | nnet_common.h:37         |  59,310 (2 calls)   |
+|        + reduce<ap_ufixed<30, 8, AP_T...      | nnet_common.h:37         |  58,844 (4 calls)   |
+|         + reduce<ap_ufixed<30, 8, AP_T...     | nnet_common.h:37         |  57,912 (8 calls)   |
+|          + reduce<ap_ufixed<30, 8, AP_T...    | nnet_common.h:37         |  56,048 (16 calls)  |
+|           + reduce<ap_ufixed<30, 8, AP_T...   | nnet_common.h:37         |  52,320 (32 calls)  |
+|            + reduce<ap_ufixed<30, 8, AP_T...  | nnet_common.h:37         |  44,864 (64 calls)  |
+|             + reduce<ap_ufixed<30, 8, AP_T... | nnet_common.h:37         |  29,952 (128 calls) |
+|                operator()                     | nnet_common.h:51         |  28,672 (128 calls) |
+|               operator()                      | nnet_common.h:51         |  14,336 (64 calls)  |
+|              operator()                       | nnet_common.h:51         |   7,168 (32 calls)  |
+|             operator()                        | nnet_common.h:51         |   3,584 (16 calls)  |
+|            operator()                         | nnet_common.h:51         |   1,792 (8 calls)   |
+|           operator()                          | nnet_common.h:51         |     896 (4 calls)   |
+|          operator()                           | nnet_common.h:51         |     448 (2 calls)   |
+|         operator()                            | nnet_common.h:51         |     224             |
+|      + reduce<ap_ufixed<30, 8, AP_T...        | nnet_common.h:37         |  33,391             |
+|       + reduce<ap_ufixed<30, 8, AP_T...       | nnet_common.h:37         |  29,655             |
+|        + reduce<ap_ufixed<30, 8, AP_T...      | nnet_common.h:37         |  29,422 (2 calls)   |
+|         + reduce<ap_ufixed<30, 8, AP_T...     | nnet_common.h:37         |  28,956 (4 calls)   |
+|          + reduce<ap_ufixed<30, 8, AP_T...    | nnet_common.h:37         |  28,024 (8 calls)   |
+|           + reduce<ap_ufixed<30, 8, AP_T...   | nnet_common.h:37         |  26,160 (16 calls)  |
+|            + reduce<ap_ufixed<30, 8, AP_T...  | nnet_common.h:37         |  22,432 (32 calls)  |
+|             + reduce<ap_ufixed<30, 8, AP_T... | nnet_common.h:37         |  14,976 (64 calls)  |
+|                operator()                     | nnet_common.h:51         |  14,336 (64 calls)  |
+|               operator()                      | nnet_common.h:51         |   7,168 (32 calls)  |
+|              operator()                       | nnet_common.h:51         |   3,584 (16 calls)  |
+|             operator()                        | nnet_common.h:51         |   1,792 (8 calls)   |
+|            operator()                         | nnet_common.h:51         |     896 (4 calls)   |
+|           operator()                          | nnet_common.h:51         |     448 (2 calls)   |
+|          operator()                           | nnet_common.h:51         |     224             |
+|       + reduce<ap_ufixed<30, 8, AP_T...       | nnet_common.h:37         |   3,503             |
+|        + reduce<ap_ufixed<30, 8, AP_T...      | nnet_common.h:37         |   3,270 (2 calls)   |
+|         + reduce<ap_ufixed<30, 8, AP_T...     | nnet_common.h:37         |   2,804 (4 calls)   |
+|          + reduce<ap_ufixed<30, 8, AP_T...    | nnet_common.h:37         |   1,872 (8 calls)   |
+|             operator()                        | nnet_common.h:51         |   1,792 (8 calls)   |
+|            operator()                         | nnet_common.h:51         |     896 (4 calls)   |
+|           operator()                          | nnet_common.h:51         |     448 (2 calls)   |
+|          operator()                           | nnet_common.h:51         |     224             |
+|         operator()                            | nnet_common.h:51         |     224             |
+|        operator()                             | nnet_common.h:51         |     224             |
+|       softmax_idx_from_real_val<ap...         | nnet_activation.h:141    |      97             |
+|    v_iq<ap_ufixed<6, 2, AP_RND,...            | nnet_code_gen.h:5620     |  15,887             |
+|  + pointwise_conv_1d_cl<ap_ufix...            | nnet_conv1d.h:52         | 257,888             |
+|   + conv                                      | nnet_conv1d.h:72         | 257,885             |
+|    + conv_1d_latency_cl<ap_ufixed...          | nnet_conv1d_latency.h:11 | 257,883             |
+|       fill_buffer                             | nnet_code_gen.h:5760     | 257,201             |
+|       product                                 | nnet_mult.h:70           |     141             |
+|       cast<ap_ufixed<8, 2, AP_TRN,...         | nnet_mult.h:110          |      60             |
+|    quantizer_2<ap_ufixed<8, 1, ...            | nnet_code_gen.h:7369     |   4,969             |
+|    quantizer_3<ap_fixed<12, 5, ...            | nnet_code_gen.h:7412     |  19,961             |
+|  + einsum<ap_ufixed<7, 1, AP_TR...            | nnet_einsum.h:31         |     698             |
+|   + transpose<ap_ufixed<7, 1, AP...           | nnet_transpose.h:29      |      42             |
+|      transfer_idx<config29_tpose_...          | nnet_transpose.h:18      |      25             |
+|   + transpose<ap_fixed<11, 5, AP...           | nnet_transpose.h:29      |      42             |
+|      transfer_idx<config29_tpose_...          | nnet_transpose.h:18      |      25             |
+|     product                                   | nnet_mult.h:70           |     141             |
+|   + transpose<ap_fixed<12, 5, AP...           | nnet_transpose.h:29      |      42             |
+|      transfer_idx<config29_tpose_...          | nnet_transpose.h:18      |      25             |
+|    out_proj_iq<ap_fixed<12, 5, ...            | nnet_code_gen.h:7551     |  19,965             |
+|  + pointwise_conv_1d_cl<ap_fixe...            | nnet_conv1d.h:52         |     866             |
+|   + conv                                      | nnet_conv1d.h:94         |     863             |
+|    + pointwise_conv_1d_latency_cl...          | nnet_conv1d_latency.h:89 |     774             |
+|       product                                 | nnet_mult.h:70           |     141             |
+|       cast<ap_fixed<11, 5, AP_TRN,...         | nnet_mult.h:110          |      60             |
+|    norm_pooled_iq<ap_fixed<13, ...            | nnet_code_gen.h:7707     |  77,821             |
+|  + normalize<ap_fixed<12, 6, AP...            | nnet_batchnorm.h:31      |     429             |
+|     product                                   | nnet_mult.h:70           |     141             |
+|    bottleneck_iq<ap_fixed<11, 4...            | nnet_code_gen.h:8225     |  77,729             |
+|  + dense<ap_fixed<10, 4, AP_TRN...            | nnet_dense.h:41          |     595             |
+|   + dense                                     | nnet_dense.h:50          |     593             |
+|    + dense_latency<ap_fixed<10, 4...          | nnet_dense_latency.h:13  |     591             |
+|       product                                 | nnet_mult.h:70           |     141             |
+|       cast<ap_fixed<10, 4, AP_TRN,...         | nnet_mult.h:110          |       3             |
++-----------------------------------------------+--------------------------+---------------------+
+    * - Exceeded design size warning message threshold
+
+* Design Size Message Settings
++---------------------------------------------+--------+------------------------------------------------------------------+
+| Message Setting                             | Value  | Description                                                      |
++---------------------------------------------+--------+------------------------------------------------------------------+
+| config_compile -design_size_maximum_warning | 100000 | Show a warning when total design instructions exceeds this value |
++---------------------------------------------+--------+------------------------------------------------------------------+
+
+
