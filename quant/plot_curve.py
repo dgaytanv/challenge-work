@@ -56,71 +56,78 @@ def main():
     if not pts:
         print('no benched rows yet'); return
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8.4, 7.4), sharex=True,
-                                   gridspec_kw={'height_ratios': [1.35, 1], 'hspace': 0.12})
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8.6, 7.6), sharex=True,
+                                   gridspec_kw={'height_ratios': [1.35, 1], 'hspace': 0.14})
     fig.patch.set_facecolor('#fcfcfb')
     for ax in (ax1, ax2):
         ax.set_facecolor('#fcfcfb')
         ax.grid(True, color=GRID, lw=0.6, alpha=0.9)
         ax.set_axisbelow(True)
-        for s in ('top', 'right'):
-            ax.spines[s].set_visible(False)
-        for s in ('left', 'bottom'):
-            ax.spines[s].set_color(GRID)
+        for sp in ('top', 'right'):
+            ax.spines[sp].set_visible(False)
+        for sp in ('left', 'bottom'):
+            ax.spines[sp].set_color(GRID)
         ax.tick_params(colors=MUTED, labelsize=9)
-
-    # reference lines, direct-labelled (no legend entry needed - they are annotations)
-    for ax, (name, ma, auc) in ((ax1, FLOAT_REF), (ax2, FLOAT_REF)):
-        v = ma if ax is ax1 else auc
-        ax.axhline(v, color=MUTED, lw=1.2, ls=(0, (5, 3)), alpha=0.85)
-    for ax, (name, ma, auc) in ((ax1, STAGE_A), (ax2, STAGE_A)):
-        v = ma if ax is ax1 else auc
-        ax.axhline(v, color=MUTED, lw=1.2, ls=(0, (1.5, 2.5)), alpha=0.85)
 
     gel = sorted([p for p in pts if p['act'] == 'gelu'], key=lambda p: p['cap'])
     rel = sorted([p for p in pts if p['act'] == 'relu'], key=lambda p: p['cap'])
     live = [p for p in gel if p['ma'] > 0.55]
     dead = [p for p in gel if p['ma'] <= 0.55]
 
-    ax1.errorbar([p['cap'] for p in live], [p['ma'] for p in live],
-                 yerr=[3 * p['sd'] for p in live], color=BLUE, lw=2, marker='o', ms=8,
-                 mfc=BLUE, mec='#fcfcfb', mew=1.6, capsize=3, elinewidth=1.2, zorder=3)
-    if dead:
-        ax1.plot([p['cap'] for p in dead], [p['ma'] for p in dead], color=BLUE, lw=2,
-                 ls=(0, (2, 2)), marker='o', ms=9, mfc='none', mec=BLUE, mew=1.8, zorder=3)
-        d = dead[-1]
-        ax1.annotate('collapsed\n(1 distinct latent)', (d['cap'], d['ma']),
-                     xytext=(9, 14), textcoords='offset points', fontsize=8.5,
-                     color=MUTED, ha='left', linespacing=1.3)
-        ax1.plot([dead[-1]['cap'], live[0]['cap']], [dead[-1]['ma'], live[0]['ma']],
-                 color=BLUE, lw=2, ls=(0, (2, 2)), zorder=2)
-    if rel:
-        ax1.errorbar([p['cap'] for p in rel], [p['ma'] for p in rel],
-                     yerr=[3 * p['sd'] for p in rel], color=ORANGE, lw=0, marker='D',
-                     ms=8, mfc=ORANGE, mec='#fcfcfb', mew=1.6, capsize=3,
-                     elinewidth=1.2, zorder=4)
+    # The y range is deliberately focused on the region where the rows differ, which puts
+    # any collapsed row far below the axis. A collapsed row is therefore drawn ON the
+    # bottom spine as a hollow marker with a downward caret and its true value in the
+    # label -- never silently clipped out of view.
+    ax1.set_xlim(2.4, 10.6)
+    ax1.set_ylim(0.7735, 0.8155)
+    ax2.set_ylim(0.8435, 0.9125)
 
+    for ax, ref_ma, ref_auc, style, name in (
+            (ax1, FLOAT_REF[1], FLOAT_REF[2], (0, (5, 3)), 'float L1T reference'),
+            (ax2, FLOAT_REF[1], FLOAT_REF[2], (0, (5, 3)), 'float L1T reference'),
+            (ax1, STAGE_A[1], STAGE_A[2], (0, (1.5, 2.5)), 'stage A: LayerNorm\u2192BatchNorm, unquantized'),
+            (ax2, STAGE_A[1], STAGE_A[2], (0, (1.5, 2.5)), 'stage A: LayerNorm\u2192BatchNorm, unquantized')):
+        v = ref_ma if ax is ax1 else ref_auc
+        ax.axhline(v, color=MUTED, lw=1.2, ls=style, alpha=0.85)
+        # label INSIDE the axes on the left, so it can never overflow or leave the canvas
+        ax.text(2.55, v, name, va='bottom', ha='left', fontsize=8.2, color=MUTED,
+                bbox=dict(fc='#fcfcfb', ec='none', pad=1.2))
+
+    def draw(ax, key, ylo):
+        ax.errorbar([p['cap'] for p in live], [p[key] for p in live],
+                    yerr=[3 * p['sd'] for p in live] if key == 'ma' else None,
+                    color=BLUE, lw=2, marker='o', ms=8, mfc=BLUE, mec='#fcfcfb', mew=1.6,
+                    capsize=3, elinewidth=1.2, zorder=3)
+        if rel:
+            ax.errorbar([p['cap'] for p in rel], [p[key] for p in rel],
+                        yerr=[3 * p['sd'] for p in rel] if key == 'ma' else None,
+                        color=ORANGE, lw=0, marker='D', ms=8, mfc=ORANGE, mec='#fcfcfb',
+                        mew=1.6, capsize=3, elinewidth=1.2, zorder=4)
+        for d in dead:
+            ax.plot([d['cap']], [ylo], marker='o', ms=9, mfc='none', mec=BLUE, mew=1.8,
+                    clip_on=False, zorder=5)
+            ax.plot([d['cap']], [ylo], marker='v', ms=6, color=BLUE, clip_on=False, zorder=5)
+            ax.annotate(f'{d["cap"]} bits: collapsed to {d[key]:.4f}',
+                        (d['cap'], ylo), xytext=(11, 6), textcoords='offset points',
+                        fontsize=8.2, color=MUTED, ha='left', va='bottom')
+
+    draw(ax1, 'ma', 0.7735)
+    draw(ax2, 'auc', 0.8435)
+
+    # EBOPs once per bit cap, on the GELU row only: EBOPs are a function of the cap, not
+    # of the activation (6-bit GELU 3.806e8 vs 6-bit ReLU 3.804e8), so labelling both
+    # points would print the same number twice on top of itself.
     for p in live:
-        if p['eb']:
-            ax1.annotate(f"{p['eb']/1e8:.2f}e8", (p['cap'], p['ma']), xytext=(0, -17),
-                         textcoords='offset points', fontsize=8, color=MUTED, ha='center')
-    ax1.set_ylabel('bench mean_area', fontsize=10, color=INK)
-    ax1.set_ylim(0.770, 0.816)
-    ax1.text(10.15, FLOAT_REF[1], ' float L1T reference', va='center', fontsize=8.5, color=MUTED)
-    ax1.text(10.15, STAGE_A[1] - 0.0012, ' stage A (LayerNorm→BatchNorm, unquantized)',
-             va='center', fontsize=8.5, color=MUTED)
+        if not p['eb']:
+            continue
+        dy = 13 if p['ma'] < 0.79 else -18
+        ax1.annotate(f"{p['eb']/1e8:.2f}e8", (p['cap'], p['ma']), xytext=(0, dy),
+                     textcoords='offset points', fontsize=8, color=MUTED, ha='center')
 
-    ax2.plot([p['cap'] for p in live], [p['auc'] for p in live], color=BLUE, lw=2,
-             marker='o', ms=8, mfc=BLUE, mec='#fcfcfb', mew=1.6, zorder=3)
-    if rel:
-        ax2.plot([p['cap'] for p in rel], [p['auc'] for p in rel], color=ORANGE, lw=0,
-                 marker='D', ms=8, mfc=ORANGE, mec='#fcfcfb', mew=1.6, zorder=4)
+    ax1.set_ylabel('bench mean_area', fontsize=10, color=INK)
     ax2.set_ylabel('clean AUC', fontsize=10, color=INK)
     ax2.set_xlabel('learned bit-width cap  (weights: total bits; data lanes: fractional bits)',
                    fontsize=10, color=INK)
-    ax2.set_ylim(0.845, 0.912)
-
-    ax1.set_xlim(2.4, 10.6)
     ax1.set_xticks([3, 4, 6, 8, 10])
     ax1.set_xticklabels(['3', '4', '6', '8', '10'])
 
@@ -128,10 +135,10 @@ def main():
     ax1.legend(handles=[
         Line2D([], [], color=BLUE, lw=2, marker='o', ms=7, mec='#fcfcfb', mew=1.4, label='GELU'),
         Line2D([], [], color=ORANGE, lw=0, marker='D', ms=7, mec='#fcfcfb', mew=1.4, label='ReLU'),
-    ], loc='lower right', frameon=False, fontsize=9, labelcolor=INK)
+    ], loc='center right', frameon=False, fontsize=9, labelcolor=INK)
 
     ax1.set_title('Quantized encoder: accuracy versus bit-width cap\n'
-                  'L1T eval, eta_max 3.0, R=5 probe refits; error bars 3σ; EBOPs (N=200) below each point',
+                  'L1T eval, eta_max 3.0, R=5 probe refits; error bars 3\u03c3; EBOPs (N=200) beside each point',
                   fontsize=11, color=INK, loc='left', pad=12, linespacing=1.5)
 
     os.makedirs(PLOTS, exist_ok=True)
@@ -140,7 +147,6 @@ def main():
     for dst in (f'{PLOTS}/quant_curve_latest.png', f'{PLOTS}/quant_curve_{ts}.png'):
         fig.savefig(dst, dpi=170, bbox_inches='tight', facecolor=fig.get_facecolor())
         print(f'wrote {dst}')
-    # table view, so identity and values never depend on the figure alone
     with open(f'{PLOTS}/quant_curve_latest.txt', 'w') as f:
         f.write(f'{"tag":24s} {"cap":>4s} {"act":>5s} {"EBOPs":>10s} {"mean_area":>10s} {"3sig":>8s} {"clean":>8s}\n')
         for p in sorted(pts, key=lambda p: (p['act'], p['cap'])):
@@ -149,6 +155,7 @@ def main():
         f.write(f"\nreferences: float L1T {FLOAT_REF[1]:.4f} / {FLOAT_REF[2]:.4f};"
                 f"  stage A {STAGE_A[1]:.4f} / {STAGE_A[2]:.4f}\n")
     print(f'wrote {PLOTS}/quant_curve_latest.txt')
+    return fig
 
 
 if __name__ == '__main__':
