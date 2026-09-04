@@ -62,9 +62,17 @@ launch_bench () {   # $1 = config
   name=$(basename "$cfg" .yaml); desc=$(echo "$name" | cut -d_ -f2); seed=$(echo "$name" | cut -d_ -f3)
   tag="i-${desc}-${seed}"
   if ! is_complete "$name"; then echo "[bench] SKIP $tag: training not finished"; return; fi
+  # Select the checkpoint THIS run logged, not "the only file present". Two runs can
+  # write to one outdir (a duplicate launch from a superseded driver), leaving an orphan
+  # from the interrupted one; train.py stamps its filename with its own start time, so the
+  # log's last "Saved best encoder to:" is the only thing that identifies the right file.
+  # The log is truncated on each launch, so it always describes the run that just released.
+  ckpt=$(grep -o "Saved best encoder to: .*\.pth" "$OUT/${name}.log" 2>/dev/null | tail -1 | sed "s/^Saved best encoder to: //")
+  if [ -z "$ckpt" ] || [ ! -f "$ckpt" ]; then
+    echo "[bench] REFUSING $name: log names no usable checkpoint"; return
+  fi
   n=$(ls "$OUT/$name"/*.pth 2>/dev/null | wc -l)
-  [ "$n" -eq 1 ] || { echo "[bench] REFUSING $name: $n primary checkpoints"; return; }
-  ckpt=$(ls "$OUT/$name"/*.pth)
+  [ "$n" -eq 1 ] || echo "[bench] NOTE $name: $n primary checkpoints present, using the logged one: $(basename "$ckpt")"
   cls=$(python - "$cfg" <<'PY'
 import sys; sys.path.insert(0,'src')
 from embedding.utils.cfg_handler import train_config

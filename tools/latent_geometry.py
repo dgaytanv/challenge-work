@@ -87,7 +87,14 @@ def geometry(z):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--configs', nargs='+', required=True)
+    ap.add_argument('--configs', nargs='+', default=[])
+    ap.add_argument('--pair', nargs='+', default=[], metavar='NAME=CFG:CKPT',
+                    help='explicit rows for checkpoints outside my own layout, e.g. another '
+                         'package reference. The CKPT should be taken from that run\'s bench '
+                         'JSON `ckpt` field, never from a glob: there are three '
+                         'rt_c2_champion_s11 checkpoints in three scratchpads (a smoke, the '
+                         'reference run, and another session\'s), and only the JSON says '
+                         'which one produced the number being compared against.')
     ap.add_argument('--ckptdir', default='checkpoints/phase1')
     ap.add_argument('--data', default=os.path.expanduser(
         '~/hack-data/C9_robust_tagging/eval/robust_tagging_eval_small.pt'))
@@ -101,19 +108,30 @@ def main():
     from embedding.preprocs import PFPreProcessorMeanPt
 
     feats, _ = load_data(args.data, map_location='cpu', max_events=args.events)
+    work = [(os.path.basename(c).replace('.yaml', ''), c, None) for c in sorted(args.configs)]
+    for spec in args.pair:
+        nm, rest = spec.split('=', 1)
+        cfgp, ckp = rest.split(':', 1)
+        work.append((nm, cfgp, ckp))
+
     rows = []
     print(f'{"arm":22s} {"dim":>4s} {"params":>10s} {"offset":>9s} '
           f'{"ratio_mon":>10s} {"ratio_rms":>10s} {"factor":>7s} {"cond":>10s} {"eff_rank":>9s}')
     print(f'{"":22s} {"":4s} {"":10s} {"":9s} {"(campaign 1)":>10s}')
-    for cfg_path in sorted(args.configs):
-        name = os.path.basename(cfg_path).replace('.yaml', '')
+    for name, cfg_path, explicit in work:
+        # An explicit path comes from that run's own bench JSON `ckpt` field, never a glob.
         # Select by uniqueness, not by mtime. A newest-mtime glob is the campaign-1
         # "stale checkpoint pick" (WP-H repeated the warning at 03:52): the aux/ directory
         # holds _bestauc and _last, and _last is written LAST, so an mtime rule that ever
         # sees aux/ silently grades the wrong model. This pattern is non-recursive so aux/
         # is already excluded -- the assert makes that a checked property rather than a
         # lucky one, and fails loudly if a rerun ever leaves two primaries side by side.
-        ck = sorted(glob.glob(f'{args.ckptdir}/{name}/*.pth'))
+        if explicit:
+            ck = [explicit]
+            if not os.path.exists(explicit):
+                print(f'{name:22s}  MISSING {explicit}'); continue
+        else:
+            ck = sorted(glob.glob(f'{args.ckptdir}/{name}/*.pth'))
         if not ck:
             print(f'{name:22s}  no checkpoint'); continue
         assert len(ck) == 1, (f'{name}: expected exactly one primary checkpoint, found '
