@@ -34,32 +34,56 @@ def main():
     txt = open(os.path.join(args.prj, 'firmware', 'parameters.h')).read()
 
     def cfg(name, key):
-        i = txt.index('struct ' + name + ' {')
+        m0 = re.search(r'^struct ' + name + r'\s*[:{]', txt, re.M)
+        assert m0, f'no struct {name}'
+        i = m0.start()
         window = txt[i:i + 2500]
         v = re.search(r'static const(?:expr)? unsigned ' + key + r'\s*=\s*([^;]+);', window)
         assert v, f'{key} not found in {name}'
         return v.group(1).strip()
 
     N = args.n_tokens
-    # Per-token block: one datapath, iterated n_partitions times.
-    per_token = {
-        'phi_0': 14 * 128,
-        'phi_1': 128 * 128,
-        'score': 128 * 32,
-        'v': 128 * 128,
-    }
-    # N-independent, once per event.
+
+    # Read the instantiated multiplier count for each layer from the EMITTED firmware, so
+    # this tracks whatever ParallelizationFactor / ReuseFactor the project was built with
+    # instead of restating the defaults.
+    #   a folded per-token Dense (Conv1D, n_pixels = 1) instantiates n_chan * n_filt / rf
+    #   the einsum's allocation is its multiplier_limit
+    #   the tail Dense is n_in * n_out / rf
+    CONV = {'phi_0': 'config43', 'phi_1': 'config44', 'score': 'config45',
+            'v': 'config46', 'out_proj': 'config47'}
+    conv_mults, conv_meta = {}, {}
+    for lname, cname in CONV.items():
+        n_chan = int(cfg(cname, 'n_chan'))
+        n_filt = int(cfg(cname, 'n_filt'))
+        rf = int(cfg(cname, 'reuse_factor'))
+        npart = int(cfg(cname, 'n_partitions'))
+        out_w = int(cfg(cname, 'out_width'))
+        n_pixels = out_w // npart
+        conv_mults[lname] = n_chan * n_filt * n_pixels // rf
+        conv_meta[lname] = dict(n_chan=n_chan, n_filt=n_filt, reuse_factor=rf,
+                                n_partitions=npart, n_pixels=n_pixels, out_width=out_w,
+                                iterations=npart)
+    einsum_mults = int(cfg('config29', 'multiplier_limit'))
+    bott_rf = int(cfg('config37', 'reuse_factor'))
+    bott_mults = 512 * 6 // bott_rf
+
+    per_token = {k: conv_mults[k] for k in ('phi_0', 'phi_1', 'score', 'v')}
     once = {
-        'combine (einsum, ReuseFactor 400)': int(cfg('config29', 'multiplier_limit')),
-        'out_proj (4 seeds, n_partitions=1 -> all parallel)': 4 * 128 * 128,
-        'bottleneck': 512 * 6,
+        'combine (einsum)': einsum_mults,
+        f"out_proj (n_partitions={conv_meta['out_proj']['n_partitions']})": conv_mults['out_proj'],
+        'bottleneck': bott_mults,
     }
+    # cycles: the token pass runs n_partitions iterations, each taking reuse_factor cycles
+    token_cycles = max(m['iterations'] * m['reuse_factor']
+                       for k, m in conv_meta.items() if k != 'out_proj')
     inst = sum(per_token.values()) + sum(once.values())
     unfolded = N * (14 * 128 + 128 * 128 + 128 * 32 + 128 * 128 + 8 * 4 * 16) + 4 * 128 * 128 + 512 * 6
 
     # The same design with out_proj also folded over its 4 seed positions (a one-line
-    # config change, not done in the synthesised project): 4x fewer there.
-    inst_outproj_folded = inst - 4 * 128 * 128 + 128 * 128
+    # config change). If it is already folded this is the same number.
+    op = conv_meta['out_proj']
+    inst_outproj_folded = inst - conv_mults['out_proj'] + conv_mults['out_proj'] // max(op['n_pixels'], 1)
 
     rep = dict(tag=args.tag, part=PART, n_tokens=N, clock_ns=args.clock_ns,
                clock_mhz=1000.0 / args.clock_ns,
@@ -76,8 +100,9 @@ def main():
                lut_estimate_range_out_proj_folded=[inst_outproj_folded * LUT_PER_MULT[0],
                                                    inst_outproj_folded * LUT_PER_MULT[1]],
                lut_budget=PART['LUT'],
-               token_pass_cycles=N,
-               token_pass_us=N * args.clock_ns / 1000.0,
+               layer_config_from_firmware=conv_meta,
+               token_pass_cycles=token_cycles,
+               token_pass_us=token_cycles * args.clock_ns / 1000.0,
                lut_per_mult_assumed=LUT_PER_MULT,
                caveat=('LUT figures are a PROXY from a per-multiplier LUT range, not a synthesis '
                        'result. Multiplier counts are exact, read from the emitted firmware.'))
@@ -97,10 +122,16 @@ def main():
     print(f'  ... {inst / PART["DSP"]:.1f}x the part\'s {PART["DSP"]:,} DSP48s, so most must be LUT logic')
     print(f'  LUT proxy at {LUT_PER_MULT[0]}-{LUT_PER_MULT[1]} LUT/mult: '
           f'{inst*LUT_PER_MULT[0]:,} - {inst*LUT_PER_MULT[1]:,} of {PART["LUT"]:,}')
-    print(f'  with out_proj also folded ({inst_outproj_folded:,} mults): '
-          f'{inst_outproj_folded*LUT_PER_MULT[0]:,} - {inst_outproj_folded*LUT_PER_MULT[1]:,}')
-    print(f'\ntoken pass: {N} sequential iterations = {N} cycles = {rep["token_pass_us"]:.2f} us at '
+    if inst_outproj_folded != inst:
+        print(f'  with out_proj also folded ({inst_outproj_folded:,} mults): '
+              f'{inst_outproj_folded*LUT_PER_MULT[0]:,} - {inst_outproj_folded*LUT_PER_MULT[1]:,}')
+    else:
+        print('  (out_proj is already folded in this configuration)')
+    print(f'\ntoken pass: {token_cycles} cycles = {rep["token_pass_us"]:.2f} us at '
           f'{rep["clock_mhz"]:.0f} MHz (throughput bound; total latency adds the dataflow depth)')
+    for k, m in conv_meta.items():
+        print(f'  {k:10s} n_partitions={m["n_partitions"]:>4} reuse_factor={m["reuse_factor"]} '
+              f'-> {conv_mults[k]:>7,} multipliers')
     print(f'wrote {out}')
 
 

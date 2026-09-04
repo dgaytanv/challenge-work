@@ -146,7 +146,35 @@ def _patch_mask_fn():
     def folded(name, shape, k, b, i, RND, SAT, backend):
         # Only io_parallel reaches here at all (hls4ml raises for io_stream), and only the
         # ap_fixed backends are handled below; anything else falls through untouched.
-        if len(shape) < 2 or backend.lower() not in ('vivado', 'vitis'):
+        if backend.lower() not in ('vivado', 'vitis'):
+            return orig(name, shape, k, b, i, RND, SAT, backend)
+        n_total = int(np.prod(shape))
+        # Fully homogeneous tensor (one (k, b, i) for every element): a single loop over
+        # the flat length, whatever the rank. This is what a per-tensor quantizer gives,
+        # and it is the case that matters for the 512-wide TAIL quantizers -- they are
+        # rank 1, so the leading-axis fold below cannot touch them, and at ~152 LLVM
+        # instructions per ap_fixed conversion they are the largest N-independent block in
+        # the design.
+        try:
+            flat = [np.broadcast_to(v[0], shape).ravel() for v in (k, b, i)]
+        except Exception:
+            return orig(name, shape, k, b, i, RND, SAT, backend)
+        if n_total > 1 and all(bool((v == v[0]).all()) for v in flat):
+            kk, bb, ii = int(flat[0][0]), int(flat[1][0]), int(flat[2][0])
+            body = ('        out[j] = 0;' if bb == 0 else
+                    f'        out[j] = {to_apfixed(kk, bb, ii, RND, SAT)}(inp[j]);')
+            return f"""
+template<typename input_t, typename output_t>
+void {name}(input_t *inp, output_t *out) {{
+    // WP-G P3: the quantizer is per-TENSOR here, so hls4ml's {n_total} generated lines
+    // collapse to one statement in a loop. Same arithmetic.
+    {name}_all: for (unsigned j = 0; j < {n_total}; j++) {{
+        #pragma HLS PIPELINE II=1
+{body}
+    }}
+}}
+"""
+        if len(shape) < 2:
             return orig(name, shape, k, b, i, RND, SAT, backend)
         try:
             full = [np.broadcast_to(v[0], shape) for v in (k, b, i)]

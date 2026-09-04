@@ -89,6 +89,13 @@ def main():
     ap.add_argument('--homogeneous', type=int, default=0, help='G6a: per-tensor activation quantizers')
     ap.add_argument('--pf', type=int, default=None, help='G6b: token-loop parallelization factor')
     ap.add_argument('--einsum_rf', type=int, default=None, help='ReuseFactor for the attn.v einsum')
+    ap.add_argument('--out_proj_pf', type=int, default=None,
+                    help='ParallelizationFactor for out_proj. Its input is [4, 128], so hls4ml '
+                         'defaults it to n_partitions=1 and unrolls all four seed positions -- '
+                         '65,536 multipliers, 61%% of the whole folded design. 1 folds it.')
+    ap.add_argument('--dense_rf', type=int, default=None,
+                    help='ReuseFactor for phi_1 and v, the two 128x128 per-token Denses. '
+                         'rf=4 takes each from 16,384 multipliers to 4,096 at 4x the cycles.')
     ap.add_argument('--outdir', required=True)
     ap.add_argument('--part', default='xcvu13p-flga2577-2-e')
     ap.add_argument('--clock', type=float, default=5.0, help='ns; 5.0 = 200 MHz')
@@ -115,7 +122,8 @@ def main():
 
     report = dict(tag=tag, n_tokens=args.n_tokens, io=args.io, act=args.act,
                   max_bits=args.max_bits, homogeneous=bool(args.homogeneous),
-                  pf=args.pf, einsum_rf=args.einsum_rf, part=args.part,
+                  pf=args.pf, einsum_rf=args.einsum_rf, out_proj_pf=args.out_proj_pf,
+                  dense_rf=args.dense_rf, part=args.part,
                   clock_ns=args.clock, clock_mhz=1000.0 / args.clock,
                   params=os.path.basename(args.params) if args.params else None,
                   hls4ml_patches=patches, outdir=args.outdir)
@@ -132,6 +140,14 @@ def main():
     if args.pf is not None:
         for name in TOKEN_DENSES:
             hls_cfg['LayerName'].setdefault(name, {})['ParallelizationFactor'] = args.pf
+    if args.out_proj_pf is not None:
+        hls_cfg['LayerName'].setdefault('out_proj', {})['ParallelizationFactor'] = args.out_proj_pf
+        L = m.get_layer('out_proj')
+        report['out_proj_pf_applied'] = [L.parallelization_factor, args.out_proj_pf]
+        L.parallelization_factor = args.out_proj_pf
+    if args.dense_rf is not None:
+        for name in ('phi_1', 'v'):
+            hls_cfg['LayerName'].setdefault(name, {})['ReuseFactor'] = args.dense_rf
 
     try:
         hls_model = hls4ml.converters.convert_from_keras_model(

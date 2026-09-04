@@ -1,0 +1,49 @@
+Backend: Vitis
+ClockPeriod: 5.0
+ClockUncertainty: 27%
+HLSConfig:
+  LayerName:
+    combine:
+      ReuseFactor: 400
+    out_proj:
+      ParallelizationFactor: 1
+    phi_0:
+      ParallelizationFactor: 1
+    phi_1:
+      ParallelizationFactor: 1
+      ReuseFactor: 4
+    score:
+      ParallelizationFactor: 1
+    v:
+      ParallelizationFactor: 1
+      ReuseFactor: 4
+  Model:
+    BitExact: null
+    Precision: auto
+    ReuseFactor: 1
+    Strategy: Latency
+IOType: io_parallel
+InputData: null
+InputShapes:
+  mask_add:
+  - 400
+  - 32
+  x_feat:
+  - 400
+  - 14
+KerasModel: !keras_model '/home/jovyan/c2-g/synth/prj_g6b_N400_fit/keras_model.keras'
+OutputDir: /home/jovyan/c2-g/synth/prj_g6b_N400_fit
+OutputPredictions: null
+OutputShapes:
+  layer37_out:
+  - 6
+Part: xcvu13p-flga2577-2-e
+ProjectName: pma0
+Stamp: 57449fbd
+Version: 1.0.0
+WriterConfig:
+  Namespace: null
+  TBOutputStream: both
+  WriteEmulationConstants: false
+  WriteTar: false
+  WriteWeightsTxt: true
