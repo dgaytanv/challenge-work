@@ -1,0 +1,17 @@
+{
+  "0": {
+    "basicblocks": 1,
+    "calls": "",
+    "file": "t.cpp",
+    "fileloc": 3,
+    "instructions": 101,
+    "loads": {
+      "T": 16
+    },
+    "name": "topf",
+    "stores": {
+      "T": 1
+    },
+    "total_instructions": 101
+  }
+}

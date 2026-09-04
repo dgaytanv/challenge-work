@@ -121,7 +121,7 @@ def fold_affine_into_dense_in(W, b, scale, shift):
 # Model
 # ======================================================================================
 def build_model(norm='bn', act='gelu', quantized=False, n_tokens=400,
-                beta0=1e-5, max_bits=None, masked_bn=False, name=None):
+                beta0=1e-5, max_bits=None, masked_bn=False, homogeneous=False, name=None):
     """(x_feat [N,14], mask_add [N,32]) -> latent [6].
 
     norm      : 'bn' (QBatchNormalization, hardware path) or 'ln' (float LayerNorm control)
@@ -143,6 +143,16 @@ def build_model(norm='bn', act='gelu', quantized=False, n_tokens=400,
                 has the same sign, the step size is set by the learning rate rather than by
                 the loss magnitude and multiplying the resource term by 1000 changes
                 nothing. Capping the width directly is both interpretable and effective.
+    homogeneous : campaign 2 / G6a. Force every DATA-LANE quantizer to a single
+                (k, i, f) per tensor instead of one per channel. hls4ml 1.3.0 refuses
+                io_stream for any HGQ2 model with heterogeneous activation quantization
+                (`NotImplementedError: Heterogenous quantization for activations is only
+                supported with IOType=io_parallel`), so this constraint is exactly the
+                price of an io_stream design. Weights are left heterogeneous - the brief
+                asks only for the activations, and it is the activations io_stream
+                objects to. Implemented as `heterogeneous_axis=()` (hgq's own spelling of
+                "no axis varies"), with `homogeneous_axis=None` because the two are
+                mutually exclusive in `QuantizerConfig`.
     n_tokens  : MUST be static. `QDense.build` computes its parallelization factor from
                 `prod(input_shape[1:-1])`, and hls4ml's einsum/reshape handlers assert
                 fully-known shapes. Train at 200 (training events), evaluate at 400.
@@ -153,7 +163,7 @@ def build_model(norm='bn', act='gelu', quantized=False, n_tokens=400,
     from hgq.layers import QAdd, QBatchNormalization, QDense, QEinsum, QSoftmax, QUnaryFunctionLUT
 
     act_fn = keras.activations.gelu if act == 'gelu' else keras.activations.relu
-    name = name or f'pma0_{norm}_{act}_{"q" if quantized else "f"}_{n_tokens}'
+    name = name or f'pma0_{norm}_{act}_{"q" if quantized else "f"}_{n_tokens}{"_hom" if homogeneous else ""}'
     N = n_tokens
 
     def _build():
@@ -218,8 +228,10 @@ def build_model(norm='bn', act='gelu', quantized=False, n_tokens=400,
         # Re-open the scope with homogeneous_axis=(0,) for these two layers only.
         if quantized:
             from hgq.config import QuantizerConfigScope as _QCS
-            with _QCS(q_type='kif', place='datalane', homogeneous_axis=(0,)), \
-                 _QCS(q_type='kbi', place='datalane', homogeneous_axis=(0,)):
+            tail_ax = (dict(homogeneous_axis=None, heterogeneous_axis=()) if homogeneous
+                       else dict(homogeneous_axis=(0,)))
+            with _QCS(q_type='kif', place='datalane', **tail_ax), \
+                 _QCS(q_type='kbi', place='datalane', **tail_ax):
                 pooled = norm_layer(pooled, 'norm_pooled', per_token=False)
                 latent = D(LATENT, 'bottleneck')(pooled)
         else:
@@ -236,8 +248,10 @@ def build_model(norm='bn', act='gelu', quantized=False, n_tokens=400,
 
     from hgq.constraints import MinMax
     with ExitStack() as st:
-        st.enter_context(QuantizerConfigScope(q_type='kif', place='datalane', homogeneous_axis=(0, 1)))
-        st.enter_context(QuantizerConfigScope(q_type='kbi', place='datalane', homogeneous_axis=(0, 1)))
+        dl_ax = (dict(homogeneous_axis=None, heterogeneous_axis=()) if homogeneous
+                 else dict(homogeneous_axis=(0, 1)))
+        st.enter_context(QuantizerConfigScope(q_type='kif', place='datalane', **dl_ax))
+        st.enter_context(QuantizerConfigScope(q_type='kbi', place='datalane', **dl_ax))
         if max_bits is not None:
             # weights/biases/tables are KBI: cap total bits b. data lanes are KIF: cap the
             # fractional bits f (the integer part i is set by the data range and must stay
@@ -247,7 +261,7 @@ def build_model(norm='bn', act='gelu', quantized=False, n_tokens=400,
                 b0=min(8, max_bits), bc=MinMax(0, max_bits)))
             st.enter_context(QuantizerConfigScope(
                 q_type='kif', place='datalane', f0=min(6, max_bits),
-                fc=MinMax(-24, max_bits), homogeneous_axis=(0, 1)))
+                fc=MinMax(-24, max_bits), **dl_ax))
         st.enter_context(LayerConfigScope(beta0=beta0, enable_ebops=True))
         return _build()
 

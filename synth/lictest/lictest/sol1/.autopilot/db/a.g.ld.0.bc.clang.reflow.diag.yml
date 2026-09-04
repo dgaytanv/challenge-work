@@ -1,0 +1,37 @@
+--- !Passed
+Pass:            reflow-infer-unroll
+Name:            ImplicitUnroll
+DebugLoc:        { File: t.cpp, Line: 6, Column: 19 }
+Function:        _Z4topfP8ap_fixedILi16ELi6EL9ap_q_mode5EL9ap_o_mode3ELi0EES3_RS2_
+Args:            
+  - String:          'Loop '''
+  - LoopName:        VITIS_LOOP_6_1
+  - String:          ''' is marked as complete unroll implied by the pipeline pragma'
+...
+--- !Passed
+Pass:            reflow-pragma-loop-unroll
+Name:            PragmaFullyUnroll
+DebugLoc:        { File: t.cpp, Line: 3, Column: 0 }
+Function:        _Z4topfP8ap_fixedILi16ELi6EL9ap_q_mode5EL9ap_o_mode3ELi0EES3_RS2_
+Args:            
+  - String:          'Unrolling loop '''
+  - LoopName:        VITIS_LOOP_6_1
+  - String:          ''' ('
+  - LoopLoc:         't.cpp:6:19'
+  - String:          ') '
+  - String:          'in function '''
+  - String:          topf
+  - String:          ''' completely with a factor of '
+  - Factor:          '8'
+...
+--- !Missed
+Pass:            inline
+Name:            NeverInline
+Function:        apatb_topf_ir
+Args:            
+  - Callee:          'topf(ap_fixed<16, 6, (ap_q_mode)5, (ap_o_mode)3, 0>*, ap_fixed<16, 6, (ap_q_mode)5, (ap_o_mode)3, 0>*, ap_fixed<16, 6, (ap_q_mode)5, (ap_o_mode)3, 0>&)'
+    DebugLoc:        { File: t.cpp, Line: 3, Column: 0 }
+  - String:          ' not inlined into '
+  - Caller:          apatb_topf_ir
+  - String:          ' because it should never be inlined (cost=never)'
+...

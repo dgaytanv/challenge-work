@@ -48,10 +48,15 @@ def main():
     ap.add_argument('--n_tokens', type=int, default=400)
     ap.add_argument('--float', dest='is_float', type=int, default=0,
                     help='1 = export a stage-A float BatchNorm model (no quantizers)')
+    ap.add_argument('--homogeneous', type=int, default=0,
+                    help='the model was trained with per-tensor activation quantizers '
+                         '(G6a). The quantizer VARIABLE SHAPES differ, so this must match '
+                         'the training run or load_params silently skips every bitwidth.')
     args = ap.parse_args()
 
     from train_qat import load_params
-    m = build_model(norm='bn', act=args.act, quantized=not args.is_float, n_tokens=args.n_tokens)
+    m = build_model(norm='bn', act=args.act, quantized=not args.is_float, n_tokens=args.n_tokens,
+                    homogeneous=bool(args.homogeneous))
     _ = m([np.zeros((1, args.n_tokens, 14), 'float32'),
            np.zeros((1, args.n_tokens, 32), 'float32')], training=False)
     load_params(m, args.params)
@@ -124,6 +129,28 @@ def main():
         for t, v in zip('kif', kif(cb._iq.quantizers[j])):
             sd[f'q_comb_iq{j}_{t}'] = torch.tensor(v)
 
+    # The emulator's (k, i, f) buffers are declared at the PER-CHANNEL shape. A
+    # homogeneous (G6a) model gives one scalar per tensor instead, so strict loading would
+    # raise on shape rather than on meaning. Broadcasting a scalar (k, i, f) to every
+    # channel is EXACT - the quantizer is elementwise and the triple is the same for all
+    # channels by construction - so the emulator stays bit-comparable with Keras. Only
+    # widening is allowed; a genuine shape disagreement still raises.
+    from embedding.models import QuantizedPMAEncoder
+    enc = QuantizedPMAEncoder(num_features=14, embed_size=128, latent_dim=6,
+                              num_heads=8, num_layers=0, act=args.act)
+    ref_sd = enc.state_dict()
+    n_bcast = 0
+    for k in list(sd):
+        if k not in ref_sd:
+            continue
+        want, got = tuple(ref_sd[k].shape), tuple(sd[k].shape)
+        if want != got:
+            sd[k] = sd[k].reshape((1,) * (len(want) - sd[k].dim()) + got).expand(want).contiguous()
+            n_bcast += 1
+    if n_bcast:
+        print(f'[export] broadcast {n_bcast} scalar quantizer triples to per-channel shape '
+              f'(homogeneous={bool(args.homogeneous)}); exact, the value is shared anyway')
+
     ref = torch.load(args.ref, map_location='cpu', weights_only=False)
     out = dict(preproc=ref['preproc'], encoder=sd, projector=ref['projector'],
                classifier=ref['classifier'], norm_constants=ref['norm_constants'])
@@ -131,10 +158,6 @@ def main():
     torch.save(out, args.out)
     print(f'[export] wrote {args.out} with {len(sd)} encoder tensors')
 
-    # verify the emulator's buffer names match exactly
-    from embedding.models import QuantizedPMAEncoder
-    enc = QuantizedPMAEncoder(num_features=14, embed_size=128, latent_dim=6,
-                              num_heads=8, num_layers=0, act=args.act)
     missing, unexpected = enc.load_state_dict(sd, strict=True)  # raises on mismatch
     print('[export] QuantizedPMAEncoder.load_state_dict(strict=True): OK')
 

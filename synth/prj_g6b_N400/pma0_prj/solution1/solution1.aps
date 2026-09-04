@@ -1,0 +1,13 @@
+<AutoPilot:solution xmlns:AutoPilot="com.autoesl.autopilot.solution">
+    <name>
+        <value string="solution1"/>
+    </name>
+    <project>
+        <value string="pma0_prj"/>
+    </project>
+    <flowTarget value="vivado"/>
+    <config>
+        <config_compile name_max_length="80"/>
+    </config>
+</AutoPilot:solution>
+

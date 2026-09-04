@@ -1,0 +1,15 @@
+<xilinx:hls_fe_msgs>
+    <msg msg_groups="PRAGMA_VERBOSE_DUMP" msg_id="207-5471" msg_severity="WARNING" msg_loc="/home/jovyan/c2-g/synth/lictest/t.tcl:7:9" msg_body="HLS pragma dump">
+        <args ARG_PragmaContext="directive" ARG_PragmaFunction="topf" ARG_PragmaIsValid="1" ARG_PragmaOptions="name=topf" ARG_PragmaType="top" ClangWarningOption="dump-hls-pragmas"/>
+    </msg>
+    <msg msg_groups="PRAGMA_VERBOSE_DUMP" msg_id="207-5471" msg_severity="WARNING" msg_loc="t.cpp:4:9" msg_body="HLS pragma dump">
+        <args ARG_PragmaFunction="topf" ARG_PragmaIsValid="1" ARG_PragmaOptions="II=1" ARG_PragmaType="pipeline" ClangWarningOption="dump-hls-pragmas"/>
+    </msg>
+    <msg msg_groups="PRAGMA_UNROLL" msg_id="214-291" msg_severity="INFO" msg_loc="t.cpp:6:19" msg_body="Loop 'VITIS_LOOP_6_1' is marked as complete unroll implied by the pipeline pragma">
+        <args LoopName="VITIS_LOOP_6_1"/>
+    </msg>
+    <msg msg_groups="PRAGMA_UNROLL" msg_id="214-186" msg_severity="INFO" msg_loc="t.cpp:3:0" msg_body="Unrolling loop 'VITIS_LOOP_6_1' (t.cpp:6:19) in function 'topf' completely with a factor of 8">
+        <args Factor="8" LoopLoc="t.cpp:6:19" LoopName="VITIS_LOOP_6_1"/>
+    </msg>
+</xilinx:hls_fe_msgs>
+

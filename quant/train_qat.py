@@ -133,6 +133,11 @@ def main():
     ap.add_argument('--beta0', type=float, default=1e-5)
     ap.add_argument('--masked_bn', type=int, default=0,
                     help='exclude dead tokens from the BatchNorm batch statistics')
+    ap.add_argument('--homogeneous', type=int, default=0,
+                    help='campaign 2 / G6a: force PER-TENSOR data-lane (activation) '
+                         'quantizers instead of per-channel. This is exactly the '
+                         'constraint hls4ml 1.3.0 imposes on io_stream, and the point of '
+                         'the run is to measure what it costs on the bench.')
     ap.add_argument('--max_bits', type=int, default=None,
                     help='hard cap on learned bit widths; the accuracy-vs-bits sweep axis')
     ap.add_argument('--act', default='gelu', choices=('gelu', 'relu'))
@@ -176,7 +181,7 @@ def main():
 
     student = build_model(norm=args.norm, act=args.act, quantized=bool(args.quantized),
                           n_tokens=N, beta0=args.beta0, max_bits=args.max_bits,
-                          masked_bn=bool(args.masked_bn))
+                          masked_bn=bool(args.masked_bn), homogeneous=bool(args.homogeneous))
     if args.init_params:
         n = load_params(student, args.init_params)
         print(f'[qat] seeded {n} layers from {args.init_params}')
@@ -221,6 +226,7 @@ def main():
     wpath = save_params(student, os.path.join(OUT, f'{args.tag}.params.npz'))
     res = dict(tag=args.tag, ckpt=os.path.basename(args.ckpt), train=os.path.basename(args.train),
                beta0=args.beta0, max_bits=args.max_bits, masked_bn=bool(args.masked_bn),
+               homogeneous=bool(args.homogeneous), seed=args.seed,
                act=args.act, norm=args.norm,
                quantized=bool(args.quantized),
                init_params=args.init_params, epochs=args.epochs,
