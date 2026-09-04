@@ -46,13 +46,47 @@ def main():
     ap.add_argument('--out', required=True)
     ap.add_argument('--act', default='gelu', choices=('gelu', 'relu'))
     ap.add_argument('--n_tokens', type=int, default=400)
+    ap.add_argument('--float', dest='is_float', type=int, default=0,
+                    help='1 = export a stage-A float BatchNorm model (no quantizers)')
     args = ap.parse_args()
 
     from train_qat import load_params
-    m = build_model(norm='bn', act=args.act, quantized=True, n_tokens=args.n_tokens)
+    m = build_model(norm='bn', act=args.act, quantized=not args.is_float, n_tokens=args.n_tokens)
     _ = m([np.zeros((1, args.n_tokens, 14), 'float32'),
            np.zeros((1, args.n_tokens, 32), 'float32')], training=False)
     load_params(m, args.params)
+
+    if args.is_float:
+        # No quantizers to extract: kernels and the BatchNorm affine are the whole model.
+        # The (k, i, f) buffers still have to exist for load_state_dict(strict=True), so
+        # they are written as zeros and FloatBNPMAEncoder never reads them.
+        sd = {}
+        for name in DENSES:
+            L = m.get_layer(name)
+            sd[f'w_{name}'] = torch.tensor(npy(L.kernel))
+            sd[f'b_{name}'] = torch.tensor(npy(L.bias))
+        for name in NORMS:
+            L = m.get_layer(name)
+            g, b = npy(L.gamma).astype('float64'), npy(L.beta).astype('float64')
+            mu, var = npy(L.moving_mean).astype('float64'), npy(L.moving_variance).astype('float64')
+            scale = g / np.sqrt(var + L.epsilon)
+            sd[f'ns_{name}'] = torch.tensor((scale).astype('float32'))
+            sd[f'no_{name}'] = torch.tensor((b - mu * scale).astype('float32'))
+        from embedding.models import FloatBNPMAEncoder
+        enc = FloatBNPMAEncoder(num_features=14, embed_size=128, latent_dim=6,
+                                num_heads=8, num_layers=0, act=args.act)
+        ref_sd = enc.state_dict()
+        for k in ref_sd:
+            if k not in sd:
+                sd[k] = torch.zeros_like(ref_sd[k])
+        enc.load_state_dict(sd, strict=True)
+        ref = torch.load(args.ref, map_location='cpu', weights_only=False)
+        out = dict(preproc=ref['preproc'], encoder=sd, projector=ref['projector'],
+                   classifier=ref['classifier'], norm_constants=ref['norm_constants'])
+        os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+        torch.save(out, args.out)
+        print(f'[export] wrote FLOAT {args.out}; FloatBNPMAEncoder strict load OK')
+        return
 
     sd = {}
     for name in DENSES:

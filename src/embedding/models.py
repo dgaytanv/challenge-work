@@ -685,3 +685,15 @@ class QuantizedPMAEncoder(nn.Module):
         pooled = torch.einsum('bnhs,bnhd->bshd', a4, v4).reshape(B, S, H * D)
         pooled = self._dense(pooled, 'out_proj').reshape(B, S * self.embed_size)
         return self._dense(self._norm(pooled, 'norm_pooled'), 'bottleneck')
+
+
+class FloatBNPMAEncoder(QuantizedPMAEncoder):
+    """Stage A: the same restructured graph with BatchNorm but NO quantization.
+
+    Exists so the LayerNorm -> BatchNorm swap gets its own bench row and its own delta
+    against the float LayerNorm reference, before quantization is layered on top. Without
+    it a bad quantized row cannot be attributed to the swap or to the quantizer.
+    """
+
+    def _q(self, x, name, round_mode='RND', overflow='WRAP'):
+        return x

@@ -81,18 +81,38 @@ def save_params(model, path):
 
 
 def load_params(model, path):
-    """Restore by keras variable path. Missing keys are skipped, which is what makes the
-    stage A (float) -> stage B (quantized) seeding work: the float build has no quantizer
-    variables, so the quantized build keeps its initialisers for those."""
+    """Restore by keras variable path, tolerating the float/quantized naming difference.
+
+    Two traps, both hit for real:
+    * A quantized build has quantizer bitwidth variables the float build does not, so
+      missing keys must be SKIPPED (that is what makes stage A -> stage B seeding work).
+    * `QBatchNormalization` renames its shift and scale to `bn_beta` / `bn_gamma`, because
+      on a QLayerBase `beta` is already taken by the EBOPs regularisation strength. The
+      float `keras.layers.BatchNormalization` calls them `beta` / `gamma`. So the float
+      `nrm0/beta` of shape (128,) collides with the quantized `nrm0/beta` of shape () and
+      the assign raises. Mapping the names is the fix; the shape guard below is the belt
+      to that braces, so a future collision is skipped and reported rather than assigned.
+    """
     z = np.load(path)
-    n = miss = 0
+    keys = set(z.files)
+    n = miss = skipped = 0
     for w in model.weights:
-        if w.path in z:
-            w.assign(z[w.path]); n += 1
-        else:
+        cand = [w.path]
+        if w.path.endswith('/bn_beta'):
+            cand.append(w.path[:-len('/bn_beta')] + '/beta')
+        elif w.path.endswith('/bn_gamma'):
+            cand.append(w.path[:-len('/bn_gamma')] + '/gamma')
+        src = next((c for c in cand if c in keys), None)
+        if src is None:
             miss += 1
-    if miss:
-        print(f'[qat] load_params: {n} variables restored, {miss} left at initialiser')
+            continue
+        v = z[src]
+        if tuple(v.shape) != tuple(w.shape):
+            skipped += 1
+            continue
+        w.assign(v); n += 1
+    if miss or skipped:
+        print(f'[qat] load_params: {n} restored, {miss} absent, {skipped} shape-mismatched')
     return n
 
 

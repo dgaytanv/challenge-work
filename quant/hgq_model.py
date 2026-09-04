@@ -146,7 +146,11 @@ def build_model(norm='bn', act='gelu', quantized=False, n_tokens=400,
 
         if quantized:
             D = lambda u, n: QDense(u, name=n)
-            A_ = lambda n: QUnaryFunctionLUT(act_fn, name=n)
+            # allow_heterogeneous_table=False is REQUIRED by hls4ml: its handler asserts
+            # `not layer._allow_heterogeneous_table` (converters/keras_v3/hgq2/unary_lut.py).
+            # It is also the physically honest choice - one activation LUT is shared by all
+            # 128 channels in hardware, so per-channel table precision is not implementable.
+            A_ = lambda n: QUnaryFunctionLUT(act_fn, name=n, allow_heterogeneous_table=False)
             NRM = lambda n: QBatchNormalization(epsilon=LN_EPS, name=n)
             ADD, SM = QAdd, lambda n: QSoftmax(axis=1, name=n)
         else:
