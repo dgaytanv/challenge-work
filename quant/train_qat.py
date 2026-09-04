@@ -131,6 +131,8 @@ def main():
     ap.add_argument('--train', required=True, help='training .pt file')
     ap.add_argument('--tag', required=True)
     ap.add_argument('--beta0', type=float, default=1e-5)
+    ap.add_argument('--masked_bn', type=int, default=0,
+                    help='exclude dead tokens from the BatchNorm batch statistics')
     ap.add_argument('--max_bits', type=int, default=None,
                     help='hard cap on learned bit widths; the accuracy-vs-bits sweep axis')
     ap.add_argument('--act', default='gelu', choices=('gelu', 'relu'))
@@ -173,7 +175,8 @@ def main():
     print(f'[qat] BatchNorm calibration on {len(cx)} views, keep mean {ckeep.mean():.3f}')
 
     student = build_model(norm=args.norm, act=args.act, quantized=bool(args.quantized),
-                          n_tokens=N, beta0=args.beta0, max_bits=args.max_bits)
+                          n_tokens=N, beta0=args.beta0, max_bits=args.max_bits,
+                          masked_bn=bool(args.masked_bn))
     if args.init_params:
         n = load_params(student, args.init_params)
         print(f'[qat] seeded {n} layers from {args.init_params}')
@@ -217,7 +220,8 @@ def main():
     os.makedirs(OUT, exist_ok=True)
     wpath = save_params(student, os.path.join(OUT, f'{args.tag}.params.npz'))
     res = dict(tag=args.tag, ckpt=os.path.basename(args.ckpt), train=os.path.basename(args.train),
-               beta0=args.beta0, max_bits=args.max_bits, act=args.act, norm=args.norm,
+               beta0=args.beta0, max_bits=args.max_bits, masked_bn=bool(args.masked_bn),
+               act=args.act, norm=args.norm,
                quantized=bool(args.quantized),
                init_params=args.init_params, epochs=args.epochs,
                events_per_epoch=args.events, lr=args.lr, eta_max=args.eta_max, n_tokens=N,

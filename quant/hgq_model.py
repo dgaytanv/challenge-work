@@ -121,12 +121,18 @@ def fold_affine_into_dense_in(W, b, scale, shift):
 # Model
 # ======================================================================================
 def build_model(norm='bn', act='gelu', quantized=False, n_tokens=400,
-                beta0=1e-5, max_bits=None, name=None):
+                beta0=1e-5, max_bits=None, masked_bn=False, name=None):
     """(x_feat [N,14], mask_add [N,32]) -> latent [6].
 
     norm      : 'bn' (QBatchNormalization, hardware path) or 'ln' (float LayerNorm control)
     act       : 'gelu' or 'relu'
     quantized : HGQ2 layers with EBOPs regularisation, or the plain float twin
+    masked_bn : exclude DEAD tokens from the BatchNorm batch statistics. Keras 3's
+                `BatchNormalization.call` takes a `mask` and routes it to `_moments`, so
+                this is native rather than a reimplementation (verified: the moving mean
+                differs by 2.4e-3 with and without). Bounds how much of the measured
+                LayerNorm->BatchNorm cost is dead-row contamination of the statistics
+                rather than the swap itself.
     max_bits  : hard cap on the learned bit widths (weights: total bits; data lanes:
                 fractional bits). This is the axis the accuracy-versus-bits curve is swept
                 on, because `beta0` turned out to be unusable: EBOPs came out IDENTICAL to
@@ -169,9 +175,18 @@ def build_model(norm='bn', act='gelu', quantized=False, n_tokens=400,
             NRM = lambda n: keras.layers.BatchNormalization(epsilon=LN_EPS, name=n)
             ADD, SM = keras.layers.Add, lambda n: keras.layers.Softmax(axis=1, name=n)
 
-        def norm_layer(t, tag):
+        keep_mask = None
+        if masked_bn:
+            # alive tokens carry mask_add == 0; dead ones carry -MASK_BIG
+            keep_mask = keras.layers.Lambda(
+                lambda t: ops.equal(t[..., 0], 0.0), output_shape=(n_tokens,),
+                name='keep_from_mask')(m)
+
+        def norm_layer(t, tag, per_token=True):
             if norm == 'ln':
                 return keras.layers.LayerNormalization(epsilon=LN_EPS, name=tag)(t)
+            if masked_bn and per_token:
+                return NRM(tag)(t, mask=keep_mask)
             return NRM(tag)(t)
 
         h = D(EMBED, 'phi_0')(x)
@@ -205,10 +220,10 @@ def build_model(norm='bn', act='gelu', quantized=False, n_tokens=400,
             from hgq.config import QuantizerConfigScope as _QCS
             with _QCS(q_type='kif', place='datalane', homogeneous_axis=(0,)), \
                  _QCS(q_type='kbi', place='datalane', homogeneous_axis=(0,)):
-                pooled = norm_layer(pooled, 'norm_pooled')
+                pooled = norm_layer(pooled, 'norm_pooled', per_token=False)
                 latent = D(LATENT, 'bottleneck')(pooled)
         else:
-            pooled = norm_layer(pooled, 'norm_pooled')
+            pooled = norm_layer(pooled, 'norm_pooled', per_token=False)
             latent = D(LATENT, 'bottleneck')(pooled)
         return keras.Model([x, m], latent, name=name)
 
